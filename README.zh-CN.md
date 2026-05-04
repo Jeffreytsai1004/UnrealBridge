@@ -22,18 +22,6 @@
 
 UnrealBridge 是一个面向 AI Agent 的 Unreal Engine 编辑器桥接层，围绕动画资产内省、Reactive 事件订阅、资产搜索与引用分析、蓝图图谱自动布局等核心场景，提供一套类型化的操作接口。Agent 在本地正在运行的编辑器实例中发起查询与修改，所有变更实时生效，并受事务系统约束、可被撤销。
 
-> ## 🚨 Clone 后必须先跑一次 `link_agents_skills.bat` 🚨
->
-> **使用 Codex / Gemini CLI / OpenCode / Cursor 时必需。** 只用 Claude Code 可以跳过。
->
-> Skill 真源在 `.claude/skills/`,这个脚本会创建一个 NTFS junction `.agents/skills/`,让所有遵循 [Agent Skills 开放标准](https://www.agensi.io/learn/agent-skills-open-standard) 的 Agent 客户端都能看到同一份内容。Junction 在 Windows 下无法 commit 进 git,所以每次 clone 都需要在本地物化一次 —— **只需要一次**。
->
-> ```bat
-> link_agents_skills.bat
-> ```
->
-> Mac / Linux 等价命令:`ln -sfn .claude/skills .agents/skills`(在 repo 根目录跑)。
-
 ## 亮点
 
 - **基于 AST 的防幻觉契约层。** 用户脚本到达 UE 之前，`bridge_preflight.py` 先用 Python AST 解析，对照自动生成的清单（18 个库 × 876 UFUNCTION）逐一校验每个 `unreal.UnrealBridge*Library.fn(...)` 调用——**不回到编辑器** 就能拦下不存在的库 / 函数名（带 did-you-mean）、错误的位置参数数量、未知关键字、不存在的桥接枚举成员。第二层把 `AssetRegistry` / `GameplayStatics` 的裸调用模式重定向到桥接等价物，并追踪每个返回值的实际类型，在对 `str` / `SoftObjectPath` 这类绑定类型做属性访问时给出警告；UE 对象抛出真正的 `AttributeError` 时则回查 UE Python，列出该类实际反射的 `UPROPERTY` 并给出可粘贴的修正代码（自动处理 `snake_case` ↔ `PascalCase` 的差异）。第三层 ship 一份纯关键字参数的 Python wrapper 模块，让"位置参数顺序写错"在语法层面就不可能发生。三层叠加把新会话 agent 的桥接调用失败率从 **24% 降到 16%**（A/B 验证）——这是先前仅靠 `SKILL.md` 的"调用前先查文档"提示规则一直没能稳定做到的。
@@ -74,7 +62,19 @@ git clone https://github.com/<your-fork>/UnrealBridge.git
 cd UnrealBridge
 ```
 
-### 2. 安装插件
+### 2. 🚨 跑一次 `link_agents_skills.bat`(一次性)
+
+**使用 Codex / Gemini CLI / OpenCode / Cursor 时必需。** 只用 Claude Code 可以跳过。
+
+Skill 真源在 `.claude/skills/`,这个脚本会创建一个 NTFS junction `.agents/skills/`,让所有遵循 [Agent Skills 开放标准](https://www.agensi.io/learn/agent-skills-open-standard) 的 Agent 客户端都能看到同一份内容。Junction 在 Windows 下无法 commit 进 git,所以每次 clone 都需要在本地物化一次 —— **只需要一次**。
+
+```bat
+link_agents_skills.bat
+```
+
+Mac / Linux 等价命令:`ln -sfn .claude/skills .agents/skills`(在 repo 根目录跑)。
+
+### 3. 安装插件
 
 修改 `sync_plugin.bat` 里的 `DST`，指向你 UE 项目的 `Plugins/` 目录：
 
@@ -84,11 +84,11 @@ set "DST=D:\Path\To\YourProject\Plugins\UnrealBridge"
 
 运行 `sync_plugin.bat`，它会把 `Plugin/UnrealBridge/` 镜像进项目，并跳过 `Binaries/` 与 `Intermediate/`。
 
-### 3. 构建并启动
+### 4. 构建并启动
 
 用 UE 打开 `.uproject` 让它自动重建插件，或从命令行跑项目自带的 `Build.bat`。启动编辑器 —— 插件会在 `PostEngineInit` 拉起服务器，看到日志里出现 `LogUnrealBridge: Listening on 127.0.0.1:<端口>` 就算成功。端口由 OS 分配，客户端通过多播发现自动找到它，不需要手动配置。
 
-### 4. 验证
+### 5. 验证
 
 ```bash
 python .claude/skills/unreal-bridge/scripts/bridge.py ping

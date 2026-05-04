@@ -22,18 +22,6 @@
 
 UnrealBridge is an Unreal Engine editor bridging layer built for AI Agents. It provides a typed operation surface for core scenarios such as animation-asset introspection, reactive event subscription, asset search and reference analysis, and automatic layout of Blueprint graphs. The Agent issues queries and modifications against a locally running editor instance; every change takes effect in real time, is bounded by the transaction system, and is undoable.
 
-> ## 🚨 After cloning, run `link_agents_skills.bat` once 🚨
->
-> **Required for Codex / Gemini CLI / OpenCode / Cursor.** Not needed if you only use Claude Code.
->
-> The skill source of truth lives at `.claude/skills/`. The script creates an NTFS junction at `.agents/skills/` so every other Agent runtime that follows the [Agent Skills open standard](https://www.agensi.io/learn/agent-skills-open-standard) sees the same content. Junctions can't be committed (Windows git limitation), so each clone has to materialize it locally — **once**.
->
-> ```bat
-> link_agents_skills.bat
-> ```
->
-> Mac / Linux equivalent: `ln -sfn .claude/skills .agents/skills` (run from repo root).
-
 ## Highlights
 
 - **AST-based hallucination defense.** Before any script reaches UE, `bridge_preflight.py` parses it as Python AST and validates every `unreal.UnrealBridge*Library.fn(...)` call against an auto-generated manifest (18 libraries × 876 UFUNCTIONs) — catching unknown function/library names (with did-you-mean), wrong positional arg counts, unknown kwargs, and non-existent bridge-enum members **without ever round-tripping to the editor**. A second layer redirects raw `AssetRegistry` / `GameplayStatics` usage patterns to their bridge equivalents and tracks each returned value's type so attribute access on a `str` or `SoftObjectPath` doesn't silently misbehave; on a real `AttributeError` from a UE object the bridge calls back into UE Python, lists that live class's reflected `UPROPERTY`s, and emits a paste-ready correction (auto-handles `snake_case` ↔ `PascalCase` mismatches). A third layer ships a kwargs-only Python wrapper module so positional-arg-order errors are structurally impossible. Together these dropped a fresh-context agent's bridge-call failure rate from **24% → 16%** across A/B validation runs — protection that prompt-only "look-up-before-call" rules in `SKILL.md` had failed to deliver.
@@ -74,7 +62,19 @@ git clone https://github.com/<your-fork>/UnrealBridge.git
 cd UnrealBridge
 ```
 
-### 2. Install the plugin
+### 2. 🚨 Run `link_agents_skills.bat` (one-time)
+
+**Required for Codex / Gemini CLI / OpenCode / Cursor.** Skip if you only use Claude Code.
+
+The skill source of truth lives at `.claude/skills/`. This script creates an NTFS junction at `.agents/skills/` so every Agent runtime following the [Agent Skills open standard](https://www.agensi.io/learn/agent-skills-open-standard) sees the same content. Junctions can't be committed (Windows git limitation), so each clone has to materialize it locally — **once**.
+
+```bat
+link_agents_skills.bat
+```
+
+Mac / Linux equivalent: `ln -sfn .claude/skills .agents/skills` (run from repo root).
+
+### 3. Install the plugin
 
 Edit the `DST` line in `sync_plugin.bat` to point at your UE project's `Plugins/` folder:
 
@@ -84,11 +84,11 @@ set "DST=D:\Path\To\YourProject\Plugins\UnrealBridge"
 
 Run `sync_plugin.bat`. It mirrors `Plugin/UnrealBridge/` into the project, skipping `Binaries/` and `Intermediate/`.
 
-### 3. Build & launch
+### 4. Build & launch
 
 Open the `.uproject` and let UE rebuild the plugin automatically, or run the project's `Build.bat` from the command line. Launch the editor — the plugin starts the server at `PostEngineInit`. You're good once `LogUnrealBridge: Listening on 127.0.0.1:<port>` shows up in the log (the port is OS-assigned; the client finds it via multicast — no manual config needed).
 
-### 4. Verify
+### 5. Verify
 
 ```bash
 python .claude/skills/unreal-bridge/scripts/bridge.py ping
