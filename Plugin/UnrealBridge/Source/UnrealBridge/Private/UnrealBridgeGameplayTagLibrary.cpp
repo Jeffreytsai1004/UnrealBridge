@@ -3,8 +3,11 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "GameplayTagContainer.h"
+#include "GameplayTagRedirectors.h"
 #include "GameplayTagsEditorModule.h"
 #include "GameplayTagsManager.h"
+#include "GameplayTagsSettings.h"
+#include "Misc/FileHelper.h"
 
 namespace BridgeGameplayTagOps
 {
@@ -42,6 +45,99 @@ namespace BridgeGameplayTagOps
 			default:
 				return Source->SourceName.ToString();
 		}
+	}
+
+	/**
+	 * UE 5.7 has a quirk where some Add/Rename/Remove mutations re-serialise
+	 * `UGameplayTagsSettings` and silently drop redirects whose `OldTagName`
+	 * has no live in-memory tag node — which is exactly the shape every
+	 * just-renamed redirect has (the OldTag is gone, only the redirect
+	 * preserves lookups). The in-memory `UGameplayTagsList::GameplayTagRedirects`
+	 * array still has the redirect for the rest of the session, so the bug
+	 * only surfaces on the *next* editor restart, when on-disk state wins.
+	 *
+	 * This helper closes the gap by reading the on-disk ini and re-appending
+	 * any redirects from the in-memory list that aren't textually present.
+	 * Called from Add/Rename/Remove after the underlying editor module call.
+	 *
+	 * Returns the number of redirect lines that were re-appended (0 = ini
+	 * already matches in-memory state).
+	 */
+	int32 EnsureSourceRedirectsPersisted(FName SourceName)
+	{
+		if (SourceName.IsNone()) return 0;
+
+		UGameplayTagsManager& TagsMgr = UGameplayTagsManager::Get();
+		const FGameplayTagSource* Source = TagsMgr.FindTagSource(SourceName);
+		if (!Source || !Source->SourceTagList) return 0;
+
+		const FString IniPath = Source->GetConfigFileName();
+		if (IniPath.IsEmpty()) return 0;
+
+		FString IniText;
+		if (!FFileHelper::LoadFileToString(IniText, *IniPath)) return 0;
+
+		// Build the set of redirect lines that should be present.
+		TArray<FString> MissingLines;
+		for (const FGameplayTagRedirect& R : Source->SourceTagList->GameplayTagRedirects)
+		{
+			if (R.OldTagName.IsNone() || R.NewTagName.IsNone()) continue;
+			const FString Line = FString::Printf(
+				TEXT("+GameplayTagRedirects=(OldTagName=\"%s\",NewTagName=\"%s\")"),
+				*R.OldTagName.ToString(), *R.NewTagName.ToString());
+			if (!IniText.Contains(Line, ESearchCase::CaseSensitive))
+			{
+				MissingLines.Add(Line);
+			}
+		}
+
+		if (MissingLines.Num() == 0) return 0;
+
+		// Insert before the first +GameplayTagList= line so the redirects stay
+		// clustered with their existing siblings (UE convention). Fall back to
+		// EOF append if no GameplayTagList line exists.
+		const FString TagListMarker = TEXT("+GameplayTagList=");
+		const FString JoinedNew = FString::Join(MissingLines, TEXT("\r\n")) + TEXT("\r\n");
+
+		const int32 InsertIdx = IniText.Find(TagListMarker, ESearchCase::CaseSensitive, ESearchDir::FromStart);
+		if (InsertIdx != INDEX_NONE)
+		{
+			IniText.InsertAt(InsertIdx, JoinedNew);
+		}
+		else
+		{
+			if (!IniText.EndsWith(TEXT("\n"))) IniText += TEXT("\r\n");
+			IniText += JoinedNew;
+		}
+
+		if (!FFileHelper::SaveStringToFile(IniText, *IniPath))
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("EnsureSourceRedirectsPersisted: failed to write %s"), *IniPath);
+			return 0;
+		}
+
+		UE_LOG(LogTemp, Log,
+			TEXT("EnsureSourceRedirectsPersisted: re-appended %d redirect(s) to %s"),
+			MissingLines.Num(), *IniPath);
+		return MissingLines.Num();
+	}
+
+	/** Look up a tag's primary source name (the FName the manager indexes
+	 *  it by, e.g. "DefaultGameplayTags.ini"). Used by EnsureRedirectsPersisted
+	 *  callers that only have a tag string, not a source. Returns NAME_None if
+	 *  the tag isn't registered or has no source. */
+	FName ResolveTagSourceName(const FString& TagString)
+	{
+#if WITH_EDITORONLY_DATA
+		UGameplayTagsManager& TagsMgr = UGameplayTagsManager::Get();
+		const TSharedPtr<FGameplayTagNode> Node = TagsMgr.FindTagNode(FName(*TagString));
+		if (!Node.IsValid()) return NAME_None;
+		const TArray<FName>& Sources = Node->GetAllSourceNames();
+		return Sources.Num() > 0 ? Sources[0] : NAME_None;
+#else
+		return NAME_None;
+#endif
 	}
 }
 
@@ -250,8 +346,22 @@ bool UUnrealBridgeGameplayTagLibrary::AddGameplayTag(
 	}
 
 	const FName SourceFName = SourceIni.IsEmpty() ? NAME_None : FName(*SourceIni);
-	return IGameplayTagsEditorModule::Get().AddNewGameplayTagToINI(
+	const bool bOk = IGameplayTagsEditorModule::Get().AddNewGameplayTagToINI(
 		NewTag, Comment, SourceFName, bIsRestricted, /*bAllowNonRestrictedChildren=*/true);
+
+	// UE 5.7's add can re-serialise the source ini and drop redirects whose
+	// OldTagName has no live in-memory node. Re-append any that vanished.
+	if (bOk)
+	{
+		FName ResolvedSource = SourceFName;
+		if (ResolvedSource.IsNone())
+		{
+			ResolvedSource = BridgeGameplayTagOps::ResolveTagSourceName(NewTag);
+		}
+		BridgeGameplayTagOps::EnsureSourceRedirectsPersisted(ResolvedSource);
+	}
+
+	return bOk;
 }
 
 bool UUnrealBridgeGameplayTagLibrary::RenameGameplayTag(
@@ -277,7 +387,17 @@ bool UUnrealBridgeGameplayTagLibrary::RenameGameplayTag(
 		return false;
 	}
 
-	return IGameplayTagsEditorModule::Get().RenameTagInINI(OldTag, NewTag, bRenameChildren);
+	const bool bOk = IGameplayTagsEditorModule::Get().RenameTagInINI(OldTag, NewTag, bRenameChildren);
+
+	// Re-append the just-written redirect if a follow-up serialise dropped it,
+	// and any other in-memory redirects that may have gone missing.
+	if (bOk)
+	{
+		const FName SourceName = BridgeGameplayTagOps::ResolveTagSourceName(NewTag);
+		BridgeGameplayTagOps::EnsureSourceRedirectsPersisted(SourceName);
+	}
+
+	return bOk;
 }
 
 bool UUnrealBridgeGameplayTagLibrary::RemoveGameplayTag(const FString& TagString)
@@ -297,5 +417,20 @@ bool UUnrealBridgeGameplayTagLibrary::RemoveGameplayTag(const FString& TagString
 		return false;
 	}
 
-	return IGameplayTagsEditorModule::Get().DeleteTagFromINI(Node);
+	// Capture the source name BEFORE delete (after the call, the node is gone
+	// and the lookup would fail).
+	FName SourceName = NAME_None;
+#if WITH_EDITORONLY_DATA
+	{
+		const TArray<FName>& Sources = Node->GetAllSourceNames();
+		if (Sources.Num() > 0) SourceName = Sources[0];
+	}
+#endif
+
+	const bool bOk = IGameplayTagsEditorModule::Get().DeleteTagFromINI(Node);
+	if (bOk && !SourceName.IsNone())
+	{
+		BridgeGameplayTagOps::EnsureSourceRedirectsPersisted(SourceName);
+	}
+	return bOk;
 }
