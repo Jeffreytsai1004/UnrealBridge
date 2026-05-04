@@ -181,6 +181,33 @@ Returns False if the tag doesn't exist or is native-defined.
 
 ---
 
+## Known gotchas
+
+Things that bit us during development — saved here so they don't bite you again.
+
+### Index / lookup
+
+- **SearchableName only sees on-disk asset references.** Tags added at runtime (PIE, transient editor state, C++ that calls `RequestGameplayTag` without storing it on a saved asset) don't appear in `find_assets_referencing_tag` results. Cross-check with a `grep` of `Source/` if you suspect C++ usage.
+- **A reference inside a level actor instance surfaces as the level package**, not the actor. Loading the level and inspecting actors is the only way to localise further.
+- **Cold-start race.** `find_assets_referencing_tag` returns `[]` if the AssetRegistry hasn't finished its initial scan. Allow a few seconds after editor launch (`bridge.py exec "1+1"` succeeds → registry is usually ready).
+- **`is_explicit=False` tags are implicit parents.** `Combat` exists in the tree because `Combat.Hit` was registered, but `Combat` itself has no `+GameplayTagList=` line. Don't try to remove it directly — delete its last explicit child and the parent vanishes automatically.
+
+### Mutations
+
+- **Native tags are immutable from Python.** Tags declared via `UE_DEFINE_GAMEPLAY_TAG` / `FNativeGameplayTag` live in C++ source; `add` / `rename` / `remove` will fail. `list_tag_source_inis(...)` exposes `is_writable=False` for these — check before attempting.
+- **DataTable-source tags also can't be mutated here.** Edit the DataTable asset directly via `UnrealBridgeDataTableLibrary` (planned). `is_writable=False` for these too.
+- **Don't hand-edit a source ini while the editor is running.** UE periodically serialises its in-memory tag state back to the ini and will overwrite your manual edits on shutdown. Use the bridge mutation APIs (which go through the editor module and round-trip cleanly) or close the editor first.
+- **`rename_gameplay_tag` validates `OldTag` exists; the raw `IGameplayTagsEditorModule::RenameTagInINI` does not.** Raw UE will cheerfully write `+GameplayTagRedirects=` lines for non-existent tags, leaving litter. Always go through the bridge wrapper, not raw `unreal` calls.
+- **`remove_gameplay_tag` doesn't insert a redirect.** Use `find_assets_referencing_tag(tag, include_children=True)` first to confirm zero references, otherwise dangling references will surface as warnings on next load.
+- **After `rename` followed by `remove`, the redirect is auto-cleaned.** After a manual delete (in a stopped editor), dangling redirects can accumulate — sweep them by hand.
+- **Empty `source_ini=''` writes to `Config/DefaultGameplayTags.ini`.** This is the project's default and the only writable source on most projects. To use a different ini, first call `list_tag_source_inis('TagList')` (or `'RestrictedTagList'`) to see the available targets.
+
+### Bridge USTRUCT field names (Python side)
+
+- **The `b` prefix on bool fields is stripped by UE Python.** `bIsExplicit` / `bIsRestricted` / `bFound` / `bIsWritable` in C++ become `.is_explicit` / `.is_restricted` / `.found` / `.is_writable` in Python. The preflight will warn and suggest the right name; trust it. (See `feedback_ue_python_bool_prefix.md`.)
+
+---
+
 ## Common workflows
 
 **"What references this tag I'm about to rename?"**
