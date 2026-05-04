@@ -123,6 +123,84 @@ for r in refs:
 
 ---
 
+## SearchableName Index (named-value references)
+
+The AssetRegistry indexes "named value" references separately from package-to-package refs. This is what backs the editor's right-click → "Search for References" on a GameplayTag. The index keys are `(StructType, ValueName)` pairs — `("GameplayTag", "Combat.Hit")`, `("PrimaryAssetId", "Map:L_Main")`, etc.
+
+**Common StructType values** (more exist — query `get_searchable_names_used_by_asset` on a known referencer to discover):
+
+| StructType | Example ValueName | Notes |
+|---|---|---|
+| `GameplayTag` | `Combat.Hit` | The headline use case. Use the dedicated GameplayTagLibrary helpers below for child-tag expansion. |
+| `PrimaryAssetId` | `Map:L_MainMenu` | Asset Manager's primary asset references. |
+| `GameplayCueTag` | `GameplayCue.Hit.Sparks` | Distinct subset for gameplay cues. |
+| any USTRUCT calling `Context.AddSearchableName` in `GetAssetRegistryTags` | project-specific | Custom tag-style systems (Mass, Niagara variants, game-defined). |
+
+**Caveats:**
+- Only on-disk assets are indexed — PIE / transient additions don't appear.
+- A reference inside a level actor surfaces as the **level package**, not the actor.
+- Requires the AssetRegistry to have finished its initial scan (cold-start race).
+- The `StructType` argument is the struct's short FName (`"GameplayTag"`), not the full `/Script/...` path.
+
+### find_assets_referencing_searchable_name(struct_type, value_name, package_path_filter, max_results) -> list[str]
+
+Forward query — "who uses this value?". Returns sorted, de-duplicated package paths.
+
+```python
+asl = unreal.UnrealBridgeAssetLibrary
+
+# Every asset referencing this PrimaryAssetId
+refs = asl.find_assets_referencing_searchable_name(
+    'PrimaryAssetId', 'Map:L_MainMenu', '', 0)
+
+# /Game-only, capped at 100
+game_refs = asl.find_assets_referencing_searchable_name(
+    'GameplayTag', 'Combat.Hit', '/Game', 100)
+```
+
+`max_results = 0` means unlimited. `package_path_filter = ''` disables filtering.
+
+### get_searchable_names_used_by_asset(asset_path, struct_type_filter, max_results) -> list[BridgeSearchableNameRef]
+
+Reverse query — "what values does this asset reference?". Returns `(struct_type, value_name)` pairs.
+
+```python
+# All named-value refs from one asset
+refs = asl.get_searchable_names_used_by_asset(
+    '/Game/Audio/Foley/DefaultFoleyEventAudioBank', '', 0)
+for r in refs:
+    print(f'  ({r.struct_type}, {r.value_name})')
+
+# Only GameplayTag refs from this asset
+tag_refs = asl.get_searchable_names_used_by_asset(
+    '/Game/Audio/Foley/DefaultFoleyEventAudioBank', 'GameplayTag', 0)
+```
+
+`asset_path` accepts both `/Game/Foo/Bar` and `/Game/Foo/Bar.Bar` (trailing `.AssetName` is stripped).
+
+### list_searchable_name_values(struct_type, filter_prefix, max_results) -> list[str]
+
+Enumerate every value of a given `struct_type` that **at least one asset has referenced**. Walks every package once — moderate cost on large projects; pass `max_results` to bound output.
+
+```python
+# All GameplayTags actually used somewhere in this project
+used_tags = asl.list_searchable_name_values('GameplayTag', '', 0)
+
+# Only Foley.* tags
+foley_used = asl.list_searchable_name_values('GameplayTag', 'Foley.', 0)
+```
+
+> **NOTE**: this only returns *used* values. For all *registered* GameplayTags (including those defined in config but never referenced), use `unreal.UnrealBridgeGameplayTagLibrary.list_all_registered_tags(...)` — see `bridge-gameplaytag-api.md`.
+
+`BridgeSearchableNameRef` fields:
+
+| field | type | meaning |
+|---|---|---|
+| `struct_type` | str | Short FName of the indexed USTRUCT |
+| `value_name` | str | The actual indexed value |
+
+---
+
 ## DataAsset Queries
 
 ### get_data_assets_by_base_class(base_class) -> list[AssetData]

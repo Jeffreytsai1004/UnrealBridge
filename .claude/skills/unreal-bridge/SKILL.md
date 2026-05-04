@@ -90,6 +90,7 @@ Bypass with `--no-preflight` (rare). Preview with `bridge.py preflight <path>`.
 | Multi-step BP edit feels chatty | Batch with `exec --stdin` heredoc or `exec-file`, not 3 inline `exec` calls. |
 | Pawn movement script freezes the editor | `time.sleep` inside `exec` blocks GameThread — see `bridge-gameplay-api.md` "chase a target" pattern (use `register_runtime_timer`). |
 | `print('中文' / '한글' / '日本語')` shows `���` or `涓枃` mojibake | Almost always **display-only** — the wire is byte-perfect UTF-8. See "Non-ASCII output (CJK / Greek / emoji)" below. |
+| Need "where is this GameplayTag used?" / Find References on a tag | `unreal.UnrealBridgeGameplayTagLibrary.find_assets_referencing_tag(tag, include_children, ...)`. For `PrimaryAssetId` / other named-value structs use the generic `UnrealBridgeAssetLibrary.find_assets_referencing_searchable_name(struct_type, value, ...)`. See `bridge-gameplaytag-api.md`. |
 
 ## Reading UE object attributes — never `<obj>.<attr>`
 
@@ -138,6 +139,7 @@ Signatures are now mechanically enforced (preflight). References carry semantic 
 | Level / Actor | `references/bridge-level-api.md` | Level queries, spawn/destroy/move, property get/set, selection |
 | Editor session | `references/bridge-editor-api.md` | Asset open/save, viewport camera, PIE start/stop, console/CVars, BP compile |
 | GameplayAbility | `references/bridge-gameplayability-api.md` | GA Blueprint metadata |
+| **GameplayTag references / sources** | `references/bridge-gameplaytag-api.md` | "Where is this tag used / defined?" — `find_assets_referencing_tag` (with child-tag expansion), `list_all_registered_tags`, `get_tag_source_info`. Built on the AssetRegistry SearchableName index — see `bridge-asset-api.md` "SearchableName Index" for the generic version (PrimaryAssetId, custom named-value structs). |
 | **Motion Matching — PoseSearch** | `references/bridge-pose-search-api.md` | **Read before any PSS / PSD read or write** — `DatabaseAnimationAssets` / `Channels` are `private:` and unreachable via `get_editor_property`; this lib is the only path. Includes `wait-pose-index` CLI. |
 | **Motion Matching — Chooser** | `references/bridge-chooser-api.md` | **Read before any CHT read or write** — `ResultsStructs` / `DisabledRows` etc. are `private:`; this lib is the only path. Covers NestedChooser `:Name` paths, `matched_row=-1` caveat, and the auto Compile+PostEditChange contract. |
 | Reactive handlers | `references/bridge-reactive.md` | Register Python on UE events (GameplayEvent / AnimNotify / MovementMode / Attribute / ActorLifecycle / InputAction). |

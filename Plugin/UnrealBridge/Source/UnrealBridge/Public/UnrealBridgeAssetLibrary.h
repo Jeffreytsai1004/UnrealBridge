@@ -198,6 +198,26 @@ struct FBridgeSoundInfo
 };
 
 /**
+ * One entry in the AssetRegistry SearchableName index — the (StructType,
+ * ValueName) pair that uniquely identifies a "named value" reference
+ * (e.g. a GameplayTag like ("GameplayTag", "Combat.Hit") or a
+ * PrimaryAssetId like ("PrimaryAssetId", "Map:L_MainMenu")).
+ */
+USTRUCT(BlueprintType)
+struct FBridgeSearchableNameRef
+{
+	GENERATED_BODY()
+
+	/** Short FName of the UScriptStruct ("GameplayTag", "PrimaryAssetId", "GameplayCueTag", ...). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	FString StructType;
+
+	/** The value: tag string, PrimaryAssetId string, etc. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	FString ValueName;
+};
+
+/**
  * Asset query utilities exposed to Python/Blueprint via UnrealBridge.
  * Ported from UnrealClientProtocol (MIT License - Italink).
  */
@@ -566,4 +586,77 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Asset")
 	static FBridgeSoundInfo GetSoundInfo(const FString& AssetPath);
+
+	// ── SearchableName index (the mechanism behind editor "Find References" on tags) ──
+	//
+	// AssetRegistry indexes "named value" references — anything an asset
+	// stores that is identified by (UScriptStruct, FName) rather than a
+	// full UObject reference. Common StructType values seen in the wild:
+	//   - "GameplayTag"        e.g. ValueName "Combat.Hit"
+	//   - "PrimaryAssetId"     e.g. ValueName "Map:L_MainMenu"
+	//   - "GameplayCueTag"     e.g. ValueName "GameplayCue.Hit.Sparks"
+	//   - any USTRUCT that calls Context.AddSearchableName in
+	//     GetAssetRegistryTags (project-defined tag systems, etc.)
+	//
+	// Caveats: only on-disk assets are indexed (PIE / transient additions
+	// don't appear); references inside level actor instances surface as
+	// the level package, not the actor; the AssetRegistry must have
+	// finished its initial scan (cold-start race).
+
+	/**
+	 * Reverse lookup ("who uses this value?") — returns package paths of
+	 * assets that reference (StructType, ValueName) via the SearchableName
+	 * dependency category. This is what the editor's right-click "Find
+	 * References" on a GameplayTag is built on.
+	 *
+	 * @param StructType         Short FName of the USTRUCT, e.g. "GameplayTag".
+	 * @param ValueName          The named value, e.g. "Combat.Hit".
+	 * @param PackagePathFilter  Optional — only return packages whose path
+	 *                           starts with this (e.g. "/Game" to exclude
+	 *                           engine + plugins). Empty = no filter.
+	 * @param MaxResults         Cap on returned entries. 0 = unlimited.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Asset")
+	static TArray<FString> FindAssetsReferencingSearchableName(
+		const FString& StructType,
+		const FString& ValueName,
+		const FString& PackagePathFilter,
+		int32 MaxResults);
+
+	/**
+	 * Forward lookup ("what values does this asset use?") — returns every
+	 * SearchableName reference an asset makes. Optionally filtered to one
+	 * StructType (e.g. only GameplayTags).
+	 *
+	 * @param AssetPath          Package path or full object path. Trailing
+	 *                           ".AssetName" is stripped.
+	 * @param StructTypeFilter   Optional — only return refs with this
+	 *                           StructType. Empty = all types.
+	 * @param MaxResults         Cap on returned entries. 0 = unlimited.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Asset")
+	static TArray<FBridgeSearchableNameRef> GetSearchableNamesUsedByAsset(
+		const FString& AssetPath,
+		const FString& StructTypeFilter,
+		int32 MaxResults);
+
+	/**
+	 * Enumerate every distinct value of a given StructType that appears in
+	 * the SearchableName index — i.e. every value at least one asset has
+	 * referenced. NOTE: this only returns *used* values; for the full set
+	 * of registered GameplayTags (including unused ones) call
+	 * UnrealBridgeGameplayTagLibrary.list_all_registered_tags instead.
+	 *
+	 * Walks every package in the registry once — moderate cost on large
+	 * projects; pass MaxResults to bound the result set.
+	 *
+	 * @param StructType    Short FName, e.g. "GameplayTag".
+	 * @param FilterPrefix  Optional value-prefix filter, e.g. "Ability.".
+	 * @param MaxResults    Cap. 0 = unlimited.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Asset")
+	static TArray<FString> ListSearchableNameValues(
+		const FString& StructType,
+		const FString& FilterPrefix,
+		int32 MaxResults);
 };

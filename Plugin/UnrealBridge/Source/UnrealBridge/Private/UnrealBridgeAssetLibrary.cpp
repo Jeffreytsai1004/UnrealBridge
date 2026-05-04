@@ -1343,6 +1343,162 @@ FBridgeTextureInfo UUnrealBridgeAssetLibrary::GetTextureInfo(const FString& Asse
 	return Out;
 }
 
+// ═══════════════════════════════════════════════════════════
+//  SearchableName index queries
+// ═══════════════════════════════════════════════════════════
+//
+// FAssetIdentifier is the union type AssetRegistry uses for both package
+// references (PackageName + optional ObjectName) and SearchableName refs
+// (PackageName = struct's script package, ObjectName = struct short FName,
+// ValueName = the actual indexed value). The struct-flavored constructor
+// `FAssetIdentifier(UScriptStruct*, FName)` builds the right shape; we
+// look the struct up by short name via FindFirstObject.
+
+namespace BridgeSearchableNameOps
+{
+	/** Resolve a struct short FName ("GameplayTag") to its UScriptStruct*.
+	 *  Returns nullptr if no such struct is loaded. */
+	UScriptStruct* FindStructByShortName(const FString& ShortName)
+	{
+		if (ShortName.IsEmpty()) return nullptr;
+		return FindFirstObject<UScriptStruct>(*ShortName, EFindFirstObjectOptions::None);
+	}
+
+	/** Strip a trailing ".AssetName" off a content path, leaving just the
+	 *  package path. Both "/Game/Foo/Bar" and "/Game/Foo/Bar.Bar" → "/Game/Foo/Bar". */
+	FString NormalizeToPackagePath(const FString& InPath)
+	{
+		FString Out = InPath.TrimStartAndEnd();
+		int32 DotIdx = INDEX_NONE;
+		if (Out.FindLastChar(TEXT('.'), DotIdx) && DotIdx > 0)
+		{
+			// Only strip when it looks like a package.AssetName separator
+			// (i.e. there's no slash after the dot).
+			if (Out.Find(TEXT("/"), ESearchCase::CaseSensitive, ESearchDir::FromStart, DotIdx) == INDEX_NONE)
+			{
+				Out = Out.Left(DotIdx);
+			}
+		}
+		return Out;
+	}
+}
+
+TArray<FString> UUnrealBridgeAssetLibrary::FindAssetsReferencingSearchableName(
+	const FString& StructType, const FString& ValueName,
+	const FString& PackagePathFilter, int32 MaxResults)
+{
+	TArray<FString> Result;
+	if (StructType.IsEmpty() || ValueName.IsEmpty()) return Result;
+
+	UScriptStruct* Struct = BridgeSearchableNameOps::FindStructByShortName(StructType);
+	if (!Struct)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FindAssetsReferencingSearchableName: unknown struct '%s' — module not loaded?"),
+			*StructType);
+		return Result;
+	}
+
+	IAssetRegistry& AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+	const FAssetIdentifier SearchId(Struct, FName(*ValueName));
+
+	TArray<FAssetIdentifier> Referencers;
+	AssetRegistry.GetReferencers(SearchId, Referencers,
+		UE::AssetRegistry::EDependencyCategory::SearchableName);
+
+	TSet<FString> Seen;
+	for (const FAssetIdentifier& Ref : Referencers)
+	{
+		if (Ref.PackageName.IsNone()) continue;
+		const FString PackageName = Ref.PackageName.ToString();
+		if (!PackagePathFilter.IsEmpty() && !PackageName.StartsWith(PackagePathFilter)) continue;
+		if (Seen.Contains(PackageName)) continue;
+		Seen.Add(PackageName);
+		Result.Add(PackageName);
+		if (MaxResults > 0 && Result.Num() >= MaxResults) break;
+	}
+
+	Result.Sort();
+	return Result;
+}
+
+TArray<FBridgeSearchableNameRef> UUnrealBridgeAssetLibrary::GetSearchableNamesUsedByAsset(
+	const FString& AssetPath, const FString& StructTypeFilter, int32 MaxResults)
+{
+	TArray<FBridgeSearchableNameRef> Result;
+	if (AssetPath.IsEmpty()) return Result;
+
+	const FString PackagePath = BridgeSearchableNameOps::NormalizeToPackagePath(AssetPath);
+
+	IAssetRegistry& AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+	// Brace-init avoids C++ most-vexing-parse: `FAssetIdentifier x(FName(*y));`
+	// would otherwise be parsed as a function declaration.
+	const FAssetIdentifier PackageId{FName(*PackagePath)};
+
+	TArray<FAssetIdentifier> Dependencies;
+	AssetRegistry.GetDependencies(PackageId, Dependencies,
+		UE::AssetRegistry::EDependencyCategory::SearchableName);
+
+	const FName FilterFName = StructTypeFilter.IsEmpty() ? NAME_None : FName(*StructTypeFilter);
+
+	for (const FAssetIdentifier& Dep : Dependencies)
+	{
+		if (!Dep.IsValue()) continue;
+		if (!FilterFName.IsNone() && Dep.ObjectName != FilterFName) continue;
+
+		FBridgeSearchableNameRef Ref;
+		Ref.StructType = Dep.ObjectName.ToString();
+		Ref.ValueName = Dep.ValueName.ToString();
+		Result.Add(Ref);
+
+		if (MaxResults > 0 && Result.Num() >= MaxResults) break;
+	}
+
+	return Result;
+}
+
+TArray<FString> UUnrealBridgeAssetLibrary::ListSearchableNameValues(
+	const FString& StructType, const FString& FilterPrefix, int32 MaxResults)
+{
+	TArray<FString> Result;
+	if (StructType.IsEmpty()) return Result;
+
+	IAssetRegistry& AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+	const FName StructFName(*StructType);
+
+	// Stream every asset via EnumerateAllAssets — empty FARFilter through
+	// GetAssets returns nothing on this UE version, but EnumerateAllAssets
+	// reliably visits the full registry.
+	TSet<FString> Unique;
+	TSet<FName> SeenPackages;  // many assets share a package; only query each once
+	AssetRegistry.EnumerateAllAssets([&](const FAssetData& AssetData) -> bool
+	{
+		if (SeenPackages.Contains(AssetData.PackageName)) return true;
+		SeenPackages.Add(AssetData.PackageName);
+
+		const FAssetIdentifier PackageId{AssetData.PackageName};
+		TArray<FAssetIdentifier> Deps;
+		AssetRegistry.GetDependencies(PackageId, Deps,
+			UE::AssetRegistry::EDependencyCategory::SearchableName);
+
+		for (const FAssetIdentifier& Dep : Deps)
+		{
+			if (!Dep.IsValue()) continue;
+			if (Dep.ObjectName != StructFName) continue;
+
+			FString Val = Dep.ValueName.ToString();
+			if (!FilterPrefix.IsEmpty() && !Val.StartsWith(FilterPrefix)) continue;
+			Unique.Add(MoveTemp(Val));
+		}
+		return true;  // keep iterating
+	});
+
+	Result = Unique.Array();
+	Result.Sort();
+	if (MaxResults > 0 && Result.Num() > MaxResults) Result.SetNum(MaxResults);
+	return Result;
+}
+
 FBridgeSoundInfo UUnrealBridgeAssetLibrary::GetSoundInfo(const FString& AssetPath)
 {
 	FBridgeSoundInfo Out;

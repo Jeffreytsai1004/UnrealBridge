@@ -16,7 +16,7 @@ structural rather than mnemonic.
 
 import unreal
 
-_GENERATED_AT = '2026-05-02T14:48:37+00:00'
+_GENERATED_AT = '2026-05-04T14:40:43+00:00'
 _UE_VERSION = '5.7.1-48512491+++UE5+Release-5.7'
 
 class Anim:
@@ -357,6 +357,11 @@ class Asset:
         return unreal.UnrealBridgeAssetLibrary.does_folder_exist(folder_path)
 
     @staticmethod
+    def find_assets_referencing_searchable_name(*, struct_type, value_name, package_path_filter, max_results):
+        """X.find_assets_referencing_searchable_name(struct_type, value_name, package_path_filter, max_results) -> Array[str]"""
+        return unreal.UnrealBridgeAssetLibrary.find_assets_referencing_searchable_name(struct_type, value_name, package_path_filter, max_results)
+
+    @staticmethod
     def find_redirectors_under_path(*, folder_path, recursive):
         """X.find_redirectors_under_path(folder_path, recursive) -> Array[SoftObjectPath]  Note: SoftObjectPath does NOT stringify usefully — call .export_text() for the '/Game/Foo.Foo' path (or .to_tuple()[0]). See bridge-asset-api.md."""
         return unreal.UnrealBridgeAssetLibrary.find_redirectors_under_path(folder_path, recursive)
@@ -472,6 +477,11 @@ class Asset:
         return unreal.UnrealBridgeAssetLibrary.get_package_referencers(package_name, hard_only)
 
     @staticmethod
+    def get_searchable_names_used_by_asset(*, asset_path, struct_type_filter, max_results):
+        """X.get_searchable_names_used_by_asset(asset_path, struct_type_filter, max_results) -> Array[BridgeSearchableNameRef]"""
+        return unreal.UnrealBridgeAssetLibrary.get_searchable_names_used_by_asset(asset_path, struct_type_filter, max_results)
+
+    @staticmethod
     def get_skeletal_mesh_info(*, asset_path):
         """X.get_skeletal_mesh_info(asset_path) -> BridgeSkeletalMeshInfo"""
         return unreal.UnrealBridgeAssetLibrary.get_skeletal_mesh_info(asset_path)
@@ -515,6 +525,11 @@ class Asset:
     def list_assets_under_path_simple(*, content_folder_path):
         """X.list_assets_under_path_simple(content_folder_path) -> Array[SoftObjectPath]  Note: SoftObjectPath does NOT stringify usefully — call .export_text() for the '/Game/Foo.Foo' path (or .to_tuple()[0]). See bridge-asset-api.md."""
         return unreal.UnrealBridgeAssetLibrary.list_assets_under_path_simple(content_folder_path)
+
+    @staticmethod
+    def list_searchable_name_values(*, struct_type, filter_prefix, max_results):
+        """X.list_searchable_name_values(struct_type, filter_prefix, max_results) -> Array[str]"""
+        return unreal.UnrealBridgeAssetLibrary.list_searchable_name_values(struct_type, filter_prefix, max_results)
 
     @staticmethod
     def resolve_redirector(*, asset_path):
@@ -3118,6 +3133,25 @@ class Gameplay:
     def wake_pie_actor_physics(*, actor_name):
         """X.wake_pie_actor_physics(actor_name) -> bool"""
         return unreal.UnrealBridgeGameplayLibrary.wake_pie_actor_physics(actor_name)
+
+
+class GameplayTag:
+    """Wraps unreal.UnrealBridgeGameplayTagLibrary (kwargs-only)."""
+
+    @staticmethod
+    def find_assets_referencing_tag(*, tag_string, include_children, package_path_filter, max_results):
+        """X.find_assets_referencing_tag(tag_string, include_children, package_path_filter, max_results) -> Array[str]"""
+        return unreal.UnrealBridgeGameplayTagLibrary.find_assets_referencing_tag(tag_string, include_children, package_path_filter, max_results)
+
+    @staticmethod
+    def get_tag_source_info(*, tag_string):
+        """X.get_tag_source_info(tag_string) -> BridgeTagSourceInfo"""
+        return unreal.UnrealBridgeGameplayTagLibrary.get_tag_source_info(tag_string)
+
+    @staticmethod
+    def list_all_registered_tags(*, filter_prefix, max_results):
+        """X.list_all_registered_tags(filter_prefix, max_results) -> Array[str]"""
+        return unreal.UnrealBridgeGameplayTagLibrary.list_all_registered_tags(filter_prefix, max_results)
 
 
 class Level:
