@@ -41,7 +41,7 @@ Optional flags: `--project=<name|path>` (disambiguate when >1 editors run; or en
 ## Workflow
 
 1. **Always ping first.**
-2. Pick the execution mode by shape (table above): `exec` for one-liners, `exec --stdin` for multi-line one-shots (the **80% case**), `exec-file` only when you'll iterate / keep.
+2. **Default to `exec --stdin` heredoc, NOT `exec-file`.** A heredoc is the right mode for ~95% of one-shot work 鈥?no temp file to name, no cleanup, prompt stays self-contained, no risk of dangling scripts in `$TEMP` / `.tmp` / project root. **Only reach for `exec-file` when you genuinely intend to re-run the same script multiple times** (iterating on a fix, comparing runs). One-shots like "find X, list Y, build a report" 鈫?heredoc. If you find yourself writing `with open("/tmp/foo.py", "w")` followed by `bridge.py exec-file /tmp/foo.py`, stop and rewrite as a heredoc.
 3. `--json` for parseable output.
 4. Exit codes: `0` success 路 `1` runtime/transport 路 `2` bad CLI args 路 `3` AST preflight rejected.
 5. **If `exec` hangs**: from a separate terminal try `gamethread-ping` (high latency = GT mid-exec, queue will drain) or `resume` (BP breakpoint).
@@ -88,6 +88,8 @@ Bypass with `--no-preflight` (rare). Preview with `bridge.py preflight <path>`.
 | `get_derived_classes` hangs / huge results | Don't pass `UObject` / `AActor` 鈥?narrow to most specific base. |
 | Multi-step BP edit feels chatty | Batch with `exec --stdin` heredoc or `exec-file`, not 3 inline `exec` calls. |
 | Pawn movement script freezes the editor | `time.sleep` inside `exec` blocks GameThread 鈥?see `bridge-gameplay-api.md` "chase a target" pattern (use `register_runtime_timer`). |
+| `print('涓枃' / '頃滉竴' / '鏃ユ湰瑾?)` shows `锟斤拷锟絗 or `娑撴瀮` mojibake | Almost always **display-only** 鈥?the wire is byte-perfect UTF-8. See "Non-ASCII output (CJK / Greek / emoji)" below. |
+| Need "where is this GameplayTag used?" / Find References on a tag | `unreal.UnrealBridgeGameplayTagLibrary.find_assets_referencing_tag(tag, include_children, ...)`. Mutations: `add_gameplay_tag` / `rename_gameplay_tag` (auto-redirect) / `remove_gameplay_tag`; pick the target ini via `list_tag_source_inis(...)`. For `PrimaryAssetId` / other named-value structs use the generic `UnrealBridgeAssetLibrary.find_assets_referencing_searchable_name(struct_type, value, ...)`. See `bridge-gameplaytag-api.md`. |
 
 ## Reading UE object attributes 鈥?never `<obj>.<attr>`
 
@@ -136,6 +138,7 @@ Signatures are now mechanically enforced (preflight). References carry semantic 
 | Level / Actor | `references/bridge-level-api.md` | Level queries, spawn/destroy/move, property get/set, selection |
 | Editor session | `references/bridge-editor-api.md` | Asset open/save, viewport camera, PIE start/stop, console/CVars, BP compile |
 | GameplayAbility | `references/bridge-gameplayability-api.md` | GA Blueprint metadata |
+| **GameplayTag references / sources / mutations** | `references/bridge-gameplaytag-api.md` | Read: `find_assets_referencing_tag` (with child-tag expansion), `list_all_registered_tags`, `get_tag_source_info`. Write: `add_gameplay_tag(tag, source_ini='', comment='')`, `rename_gameplay_tag(old, new, rename_children=True)` (auto-inserts redirect, redirect lifetime hardened 鈥?survives subsequent mutations + cold restart), `remove_gameplay_tag(tag)`. Source enum: `list_tag_source_inis(filter_type='')`. Redirect ops: `list_gameplay_tag_redirects(source='', old_prefix='')` + `remove_gameplay_tag_redirect(old, new)` for enumerate-then-sweep. Built on the AssetRegistry SearchableName index + IGameplayTagsEditorModule. `bridge-asset-api.md` "SearchableName Index" has the generic read version (PrimaryAssetId, custom named-value structs). |
 | **Motion Matching 鈥?PoseSearch** | `references/bridge-pose-search-api.md` | **Read before any PSS / PSD read or write** 鈥?`DatabaseAnimationAssets` / `Channels` are `private:` and unreachable via `get_editor_property`; this lib is the only path. Includes `wait-pose-index` CLI. |
 | **Motion Matching 鈥?Chooser** | `references/bridge-chooser-api.md` | **Read before any CHT read or write** 鈥?`ResultsStructs` / `DisabledRows` etc. are `private:`; this lib is the only path. Covers NestedChooser `:Name` paths, `matched_row=-1` caveat, and the auto Compile+PostEditChange contract. |
 | Reactive handlers | `references/bridge-reactive.md` | Register Python on UE events (GameplayEvent / AnimNotify / MovementMode / Attribute / ActorLifecycle / InputAction). |
@@ -187,6 +190,26 @@ After authoring/modifying a BP graph (and the user confirmed they want it):
 - **Size predict before spawning.** If placing several nodes in a row by hand, call `predict_node_size` for each kind first so X offsets don't overlap.
 - **Post-layout geometry reads.** After `auto_layout_graph` runs, Slate widgets don't refresh `NodePosX/Y` until they tick 鈥?so `get_rendered_node_info` returns *pre-layout* pin coords in the same exec. For crossing-detection / wire-length audits right after layout, read `get_node_layout(bp, fn, guid).pos_*` (authoritative from node model) and estimate pin Y as `pos_y + 40 + 22 脳 dir_index`. Only pay the open-graph + sleep cost when you specifically need Slate-accurate coords.
 - `auto_insert_reroutes` is intentionally NOT in the loop 鈥?empirically it produces many-knot routing that reads worse than the original. Opt in per-graph if a specific case needs it.
+
+## Non-ASCII output (CJK / Greek / emoji)
+
+Bridge is UTF-8 byte-perfect end-to-end since 2026-05-04. **Mojibake = display, not data.** Confirm with hex:
+
+```python
+print(got.encode('utf-8').hex(), '==', '娴嬭瘯'.encode('utf-8').hex())
+```
+
+If hex matches, it's a Windows cp936/cp1252 console issue 鈥?fix the *display*, not the bridge:
+
+| Situation | Fix |
+|---|---|
+| Piping `bridge.py ... > out.txt` writes cp936 | prefix `PYTHONIOENCODING=utf-8` (bash) / `$env:PYTHONIOENCODING='utf-8'` + `\| Out-File -Encoding utf8` (PS) |
+| Reading saved file back | `open(p, encoding='utf-8')` (or `utf-8-sig` for PS BOM) |
+| Calling bridge.py from another Python process | set `PYTHONIOENCODING=utf-8` in subprocess env |
+
+Verified: identifiers + literals in script source, exception messages/tracebacks, DataTable FName keys, asset paths with Chinese folders, save鈫抮estart鈫抮ead persistence. Korean/Japanese use the same UTF-8 path 鈥?verify with hex if anything looks off.
+
+**Never write temp files to `C:\` root** 鈥?use `$env:TEMP\鈥 or `/tmp/鈥.
 
 ## Safety Rules
 

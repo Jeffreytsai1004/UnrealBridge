@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-05-02T14:48:37+00:00",
+  "generated_at": "2026-05-04T16:12:45+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -1665,6 +1665,36 @@
           ],
           "returns": "bool"
         },
+        "find_assets_referencing_searchable_name": {
+          "doc": "X.find_assets_referencing_searchable_name(struct_type, value_name, package_path_filter, max_results) -> Array[str]",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_type",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "value_name",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "package_path_filter",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "max_results",
+              "type": ""
+            }
+          ],
+          "returns": "Array[str]"
+        },
         "find_redirectors_under_path": {
           "doc": "X.find_redirectors_under_path(folder_path, recursive) -> Array[SoftObjectPath]",
           "params": [
@@ -2030,6 +2060,30 @@
           ],
           "returns": "Array[str]"
         },
+        "get_searchable_names_used_by_asset": {
+          "doc": "X.get_searchable_names_used_by_asset(asset_path, struct_type_filter, max_results) -> Array[BridgeSearchableNameRef]",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "asset_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_type_filter",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "max_results",
+              "type": ""
+            }
+          ],
+          "returns": "Array[BridgeSearchableNameRef]"
+        },
         "get_skeletal_mesh_info": {
           "doc": "X.get_skeletal_mesh_info(asset_path) -> BridgeSkeletalMeshInfo",
           "params": [
@@ -2155,6 +2209,30 @@
             }
           ],
           "returns": "Array[SoftObjectPath]"
+        },
+        "list_searchable_name_values": {
+          "doc": "X.list_searchable_name_values(struct_type, filter_prefix, max_results) -> Array[str]",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_type",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "filter_prefix",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "max_results",
+              "type": ""
+            }
+          ],
+          "returns": "Array[str]"
         },
         "resolve_redirector": {
           "doc": "X.resolve_redirector(asset_path) -> str",
@@ -11401,6 +11479,184 @@
         }
       }
     },
+    "UnrealBridgeGameplayTagLibrary": {
+      "functions": {
+        "add_gameplay_tag": {
+          "doc": "X.add_gameplay_tag(new_tag, source_ini=\"\", comment=\"\", is_restricted=False) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "new_tag",
+              "type": ""
+            },
+            {
+              "default": "\"\"",
+              "has_default": true,
+              "name": "source_ini",
+              "type": ""
+            },
+            {
+              "default": "\"\"",
+              "has_default": true,
+              "name": "comment",
+              "type": ""
+            },
+            {
+              "default": "False",
+              "has_default": true,
+              "name": "is_restricted",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "find_assets_referencing_tag": {
+          "doc": "X.find_assets_referencing_tag(tag_string, include_children, package_path_filter, max_results) -> Array[str]",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "tag_string",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "include_children",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "package_path_filter",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "max_results",
+              "type": ""
+            }
+          ],
+          "returns": "Array[str]"
+        },
+        "get_tag_source_info": {
+          "doc": "X.get_tag_source_info(tag_string) -> BridgeTagSourceInfo",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "tag_string",
+              "type": ""
+            }
+          ],
+          "returns": "BridgeTagSourceInfo"
+        },
+        "list_all_registered_tags": {
+          "doc": "X.list_all_registered_tags(filter_prefix, max_results) -> Array[str]",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "filter_prefix",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "max_results",
+              "type": ""
+            }
+          ],
+          "returns": "Array[str]"
+        },
+        "list_gameplay_tag_redirects": {
+          "doc": "X.list_gameplay_tag_redirects(source_ini_filter=\"\", old_tag_prefix_filter=\"\") -> Array[BridgeTagRedirectEntry]",
+          "params": [
+            {
+              "default": "\"\"",
+              "has_default": true,
+              "name": "source_ini_filter",
+              "type": ""
+            },
+            {
+              "default": "\"\"",
+              "has_default": true,
+              "name": "old_tag_prefix_filter",
+              "type": ""
+            }
+          ],
+          "returns": "Array[BridgeTagRedirectEntry]"
+        },
+        "list_tag_source_inis": {
+          "doc": "X.list_tag_source_inis(filter_type=\"\") -> Array[BridgeTagSourceListing]",
+          "params": [
+            {
+              "default": "\"\"",
+              "has_default": true,
+              "name": "filter_type",
+              "type": ""
+            }
+          ],
+          "returns": "Array[BridgeTagSourceListing]"
+        },
+        "remove_gameplay_tag": {
+          "doc": "X.remove_gameplay_tag(tag_string) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "tag_string",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "remove_gameplay_tag_redirect": {
+          "doc": "X.remove_gameplay_tag_redirect(old_tag, new_tag) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "old_tag",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "new_tag",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "rename_gameplay_tag": {
+          "doc": "X.rename_gameplay_tag(old_tag, new_tag, rename_children=True) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "old_tag",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "new_tag",
+              "type": ""
+            },
+            {
+              "default": "True",
+              "has_default": true,
+              "name": "rename_children",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        }
+      }
+    },
     "UnrealBridgeLevelLibrary": {
       "functions": {
         "add_actor_tag": {
@@ -17641,6 +17897,10 @@
       "success",
       "width"
     ],
+    "BridgeSearchableNameRef": [
+      "struct_type",
+      "value_name"
+    ],
     "BridgeSelectedNode": [
       "node_class",
       "node_guid",
@@ -17732,6 +17992,11 @@
       "package_name",
       "visible"
     ],
+    "BridgeTagRedirectEntry": [
+      "new_tag",
+      "old_tag",
+      "source_name"
+    ],
     "BridgeTagReference": [
       "asset_class",
       "asset_path",
@@ -17748,6 +18013,21 @@
       "scan_duration_ms",
       "tag_query",
       "truncated"
+    ],
+    "BridgeTagSourceInfo": [
+      "additional_sources",
+      "found",
+      "is_explicit",
+      "is_restricted",
+      "source_location",
+      "source_type",
+      "tag_string"
+    ],
+    "BridgeTagSourceListing": [
+      "config_file_path",
+      "is_writable",
+      "source_name",
+      "source_type"
     ],
     "BridgeTextureInfo": [
       "asset_path",

@@ -964,6 +964,14 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def main():
+    # Force UTF-8 for stdout/stderr so non-ASCII output (Chinese variable names,
+    # emoji in print, etc.) survives Windows cp936/cp1252 piping. Python 3.7+.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except (AttributeError, OSError):
+            pass
+
     parser = argparse.ArgumentParser(
         prog="bridge",
         description="UnrealBridge — execute Python in Unreal Engine from the command line",
