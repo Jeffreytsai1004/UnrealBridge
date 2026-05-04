@@ -324,18 +324,32 @@ bool UUnrealBridgePropertyLibrary::SetUPropertyFromExportText(
 		const auto Resolved = BridgePropertyOps::ResolvePath(Obj, Path);
 		if (!Resolved.LeafProperty || !Resolved.LeafValuePtr) continue;
 
-		FScopedTransaction Transaction(LOCTEXT("BridgeSetUProperty", "Bridge: Set UProperty"));
-		Obj->Modify();
+		// Parse into a temp buffer FIRST — only commit to the real destination
+		// on parse success. Otherwise ImportText's "initialize-then-fail"
+		// behavior on bad input (e.g. "abc" on FloatProperty) would silently
+		// zero the live field even though we'd return false.
+		const int32 PropSize = Resolved.LeafProperty->GetSize();
+		TArray<uint8> Temp;
+		Temp.SetNumUninitialized(PropSize);
+		Resolved.LeafProperty->InitializeValue(Temp.GetData());
 
+		const TCHAR* Start = *ValueExportText;
 		const TCHAR* AfterParse = Resolved.LeafProperty->ImportText_Direct(
-			*ValueExportText, Resolved.LeafValuePtr, Obj, PPF_None, GLog);
-		if (!AfterParse)
+			Start, Temp.GetData(), Obj, PPF_None, GLog);
+		if (!AfterParse || AfterParse == Start)
 		{
+			Resolved.LeafProperty->DestroyValue(Temp.GetData());
 			UE_LOG(LogTemp, Warning,
-				TEXT("BridgeProperty: ImportText failed for '%s' = '%s'"),
+				TEXT("BridgeProperty: ImportText failed (or consumed nothing) for '%s' = '%s'"),
 				*PropertyPath, *ValueExportText);
 			return false;
 		}
+
+		// Commit
+		FScopedTransaction Transaction(LOCTEXT("BridgeSetUProperty", "Bridge: Set UProperty"));
+		Obj->Modify();
+		Resolved.LeafProperty->CopySingleValue(Resolved.LeafValuePtr, Temp.GetData());
+		Resolved.LeafProperty->DestroyValue(Temp.GetData());
 
 		if (bFireChangeNotify)
 		{
@@ -409,13 +423,14 @@ bool UUnrealBridgePropertyLibrary::ArrayAppendUProperty(
 	const int32 NewIdx = Helper.AddValue();
 	void* NewElemPtr = Helper.GetRawPtr(NewIdx);
 
+	const TCHAR* Start = *ElementExportText;
 	const TCHAR* AfterParse = ArrayProp->Inner->ImportText_Direct(
-		*ElementExportText, NewElemPtr, Obj, PPF_None, GLog);
-	if (!AfterParse)
+		Start, NewElemPtr, Obj, PPF_None, GLog);
+	if (!AfterParse || AfterParse == Start)
 	{
 		Helper.RemoveValues(NewIdx, 1);  // rollback
 		UE_LOG(LogTemp, Warning,
-			TEXT("BridgeProperty: ArrayAppend ImportText failed for '%s'"), *ElementExportText);
+			TEXT("BridgeProperty: ArrayAppend ImportText failed (or consumed nothing) for '%s'"), *ElementExportText);
 		return false;
 	}
 
