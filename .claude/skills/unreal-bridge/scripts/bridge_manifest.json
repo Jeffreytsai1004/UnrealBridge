@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-05-04T15:29:00+00:00",
+  "generated_at": "2026-05-04T16:04:24+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -11590,6 +11590,24 @@
               "default": null,
               "has_default": false,
               "name": "tag_string",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "remove_gameplay_tag_redirect": {
+          "doc": "X.remove_gameplay_tag_redirect(old_tag, new_tag) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "old_tag",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "new_tag",
               "type": ""
             }
           ],

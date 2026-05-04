@@ -16,7 +16,7 @@ structural rather than mnemonic.
 
 import unreal
 
-_GENERATED_AT = '2026-05-04T15:29:00+00:00'
+_GENERATED_AT = '2026-05-04T16:04:24+00:00'
 _UE_VERSION = '5.7.1-48512491+++UE5+Release-5.7'
 
 class Anim:
@@ -3167,6 +3167,11 @@ class GameplayTag:
     def remove_gameplay_tag(*, tag_string):
         """X.remove_gameplay_tag(tag_string) -> bool"""
         return unreal.UnrealBridgeGameplayTagLibrary.remove_gameplay_tag(tag_string)
+
+    @staticmethod
+    def remove_gameplay_tag_redirect(*, old_tag, new_tag):
+        """X.remove_gameplay_tag_redirect(old_tag, new_tag) -> bool"""
+        return unreal.UnrealBridgeGameplayTagLibrary.remove_gameplay_tag_redirect(old_tag, new_tag)
 
     @staticmethod
     def rename_gameplay_tag(*, old_tag, new_tag, rename_children=True):

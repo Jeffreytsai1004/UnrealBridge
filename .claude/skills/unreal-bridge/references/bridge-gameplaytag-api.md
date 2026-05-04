@@ -159,6 +159,24 @@ ok = gtl.rename_gameplay_tag('Combat.Hit', 'Combat.HitImpact', rename_children=T
 
 This wrapper validates `old_tag` is registered before delegating to UE — without that guard, `IGameplayTagsEditorModule::RenameTagInINI` would happily write a redirect for a non-existent tag, leaving useless `+GameplayTagRedirects=` litter in the ini. Returns False if `old_tag` doesn't exist.
 
+### remove_gameplay_tag_redirect(old_tag, new_tag) -> bool
+
+Drop a `+GameplayTagRedirects=(OldTagName="X",NewTagName="Y")` entry from the project's tag config. Use when undoing a mistaken rename or sweeping an orphan redirect.
+
+```python
+# Undo a mistaken rename:
+gtl.rename_gameplay_tag('Combat.Hit', 'Combat.HitTypo', True)  # oops
+gtl.rename_gameplay_tag('Combat.HitTypo', 'Combat.Hit', True)  # restore the right name
+gtl.remove_gameplay_tag_redirect('Combat.HitTypo', 'Combat.Hit')  # clean the wrong redirect
+
+# Sweep an orphan left over after a manual delete:
+gtl.remove_gameplay_tag_redirect('Combat.OldUnused', 'Combat.New')
+```
+
+Walks every writable source ini for a redirect matching **both** `old_tag` and `new_tag` (the pair must match exactly — typo guard preventing accidental deletes). Removes from `UGameplayTagsList::GameplayTagRedirects` (in-memory) **and** strips the line from disk, then calls `EditorRefreshGameplayTagTree()` so subsequent lookups for `old_tag` correctly fail in the same session.
+
+Returns `False` when no redirect with that exact (old, new) pair exists. Idempotent — calling twice on the same redirect just returns `False` the second time.
+
 ### remove_gameplay_tag(tag) -> bool
 
 Delete a tag from its source ini.

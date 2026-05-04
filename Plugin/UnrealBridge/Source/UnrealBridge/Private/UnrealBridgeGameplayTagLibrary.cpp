@@ -434,3 +434,110 @@ bool UUnrealBridgeGameplayTagLibrary::RemoveGameplayTag(const FString& TagString
 	}
 	return bOk;
 }
+
+bool UUnrealBridgeGameplayTagLibrary::RemoveGameplayTagRedirect(
+	const FString& OldTag, const FString& NewTag)
+{
+	if (OldTag.IsEmpty() || NewTag.IsEmpty()) return false;
+
+	UGameplayTagsManager& TagsMgr = UGameplayTagsManager::Get();
+	const FName OldFName(*OldTag);
+	const FName NewFName(*NewTag);
+
+	// Walk every writable source looking for the exact (Old, New) pair.
+	// Restricted is included even though current bridge mutations don't write
+	// there — restricted tag redirects are still valid targets to clean up.
+	static const TArray<EGameplayTagSourceType> WritableTypes = {
+		EGameplayTagSourceType::DefaultTagList,
+		EGameplayTagSourceType::TagList,
+		EGameplayTagSourceType::RestrictedTagList,
+	};
+
+	const FGameplayTagSource* FoundSource = nullptr;
+	UGameplayTagsList* FoundList = nullptr;
+	int32 FoundIdx = INDEX_NONE;
+
+	for (EGameplayTagSourceType Type : WritableTypes)
+	{
+		TArray<const FGameplayTagSource*> Sources;
+		TagsMgr.FindTagSourcesWithType(Type, Sources);
+		for (const FGameplayTagSource* Source : Sources)
+		{
+			if (!Source || !Source->SourceTagList) continue;
+			UGameplayTagsList* List = Source->SourceTagList;
+			for (int32 i = 0; i < List->GameplayTagRedirects.Num(); ++i)
+			{
+				const FGameplayTagRedirect& R = List->GameplayTagRedirects[i];
+				if (R.OldTagName == OldFName && R.NewTagName == NewFName)
+				{
+					FoundSource = Source;
+					FoundList = List;
+					FoundIdx = i;
+					break;
+				}
+			}
+			if (FoundIdx != INDEX_NONE) break;
+		}
+		if (FoundIdx != INDEX_NONE) break;
+	}
+
+	if (FoundIdx == INDEX_NONE)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("RemoveGameplayTagRedirect: redirect '%s' -> '%s' not found in any writable source"),
+			*OldTag, *NewTag);
+		return false;
+	}
+
+	// 1) drop from in-memory so EnsureSourceRedirectsPersisted won't re-add it
+	FoundList->GameplayTagRedirects.RemoveAt(FoundIdx);
+
+	// 2) strip the matching line from the on-disk ini
+	const FString IniPath = FoundSource->GetConfigFileName();
+	if (!IniPath.IsEmpty())
+	{
+		FString IniText;
+		if (FFileHelper::LoadFileToString(IniText, *IniPath))
+		{
+			const FString Line = FString::Printf(
+				TEXT("+GameplayTagRedirects=(OldTagName=\"%s\",NewTagName=\"%s\")"),
+				*OldTag, *NewTag);
+
+			// Try CRLF, then LF, then no trailing newline (last line of file).
+			bool bStripped = false;
+			for (const TCHAR* Eol : { TEXT("\r\n"), TEXT("\n") })
+			{
+				const FString WithEol = Line + Eol;
+				const int32 Idx = IniText.Find(WithEol, ESearchCase::CaseSensitive);
+				if (Idx != INDEX_NONE)
+				{
+					IniText.RemoveAt(Idx, WithEol.Len());
+					bStripped = true;
+					break;
+				}
+			}
+			if (!bStripped)
+			{
+				const int32 Idx = IniText.Find(Line, ESearchCase::CaseSensitive);
+				if (Idx != INDEX_NONE)
+				{
+					IniText.RemoveAt(Idx, Line.Len());
+					bStripped = true;
+				}
+			}
+			if (bStripped)
+			{
+				FFileHelper::SaveStringToFile(IniText, *IniPath);
+			}
+		}
+	}
+
+	// 3) tell the manager to forget the redirect — without this, lookups
+	//    for OldTag still resolve to NewTag in the running session.
+	TagsMgr.EditorRefreshGameplayTagTree();
+
+	UE_LOG(LogTemp, Log,
+		TEXT("RemoveGameplayTagRedirect: removed '%s' -> '%s' from %s"),
+		*OldTag, *NewTag, *FoundSource->SourceName.ToString());
+	return true;
+}

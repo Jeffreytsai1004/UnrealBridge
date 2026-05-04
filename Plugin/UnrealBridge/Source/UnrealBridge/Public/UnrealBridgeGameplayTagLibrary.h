@@ -227,4 +227,24 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|GameplayTag")
 	static bool RemoveGameplayTag(const FString& TagString);
+
+	/**
+	 * Remove a `+GameplayTagRedirects=(OldTagName="X",NewTagName="Y")` entry
+	 * from the project's tag config. Use when undoing a mistaken
+	 * `rename_gameplay_tag` or sweeping a stale orphan redirect that
+	 * `remove_gameplay_tag` left behind.
+	 *
+	 * Searches every writable source ini for a redirect matching BOTH
+	 * `OldTag` and `NewTag` (the pair must match exactly — preventing typo
+	 * deletes). Removes from `UGameplayTagsList::GameplayTagRedirects`
+	 * (in-memory) AND strips the corresponding line from the on-disk ini,
+	 * then rebuilds the tag tree so the manager forgets the redirect
+	 * immediately.
+	 *
+	 * @return true if a matching redirect was found and removed; false if
+	 *         no redirect with that exact (OldTag, NewTag) pair exists in
+	 *         any writable source.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|GameplayTag")
+	static bool RemoveGameplayTagRedirect(const FString& OldTag, const FString& NewTag);
 };
