@@ -39,6 +39,7 @@ public class UnrealBridge : ModuleRules
 			"GameplayAbilities",
 			"GameplayAbilitiesEditor",
 			"GameplayTags",
+			"GameplayTagsEditor",
 			"GameplayTasks",
 			"GameplayTasksEditor",
 			"MainFrame",

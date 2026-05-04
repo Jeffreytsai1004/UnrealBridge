@@ -16,7 +16,7 @@ structural rather than mnemonic.
 
 import unreal
 
-_GENERATED_AT = '2026-05-04T14:40:43+00:00'
+_GENERATED_AT = '2026-05-04T15:29:00+00:00'
 _UE_VERSION = '5.7.1-48512491+++UE5+Release-5.7'
 
 class Anim:
@@ -3139,6 +3139,11 @@ class GameplayTag:
     """Wraps unreal.UnrealBridgeGameplayTagLibrary (kwargs-only)."""
 
     @staticmethod
+    def add_gameplay_tag(*, new_tag, source_ini="", comment="", is_restricted=False):
+        """X.add_gameplay_tag(new_tag, source_ini="", comment="", is_restricted=False) -> bool"""
+        return unreal.UnrealBridgeGameplayTagLibrary.add_gameplay_tag(new_tag, source_ini, comment, is_restricted)
+
+    @staticmethod
     def find_assets_referencing_tag(*, tag_string, include_children, package_path_filter, max_results):
         """X.find_assets_referencing_tag(tag_string, include_children, package_path_filter, max_results) -> Array[str]"""
         return unreal.UnrealBridgeGameplayTagLibrary.find_assets_referencing_tag(tag_string, include_children, package_path_filter, max_results)
@@ -3152,6 +3157,21 @@ class GameplayTag:
     def list_all_registered_tags(*, filter_prefix, max_results):
         """X.list_all_registered_tags(filter_prefix, max_results) -> Array[str]"""
         return unreal.UnrealBridgeGameplayTagLibrary.list_all_registered_tags(filter_prefix, max_results)
+
+    @staticmethod
+    def list_tag_source_inis(*, filter_type=""):
+        """X.list_tag_source_inis(filter_type="") -> Array[BridgeTagSourceListing]"""
+        return unreal.UnrealBridgeGameplayTagLibrary.list_tag_source_inis(filter_type)
+
+    @staticmethod
+    def remove_gameplay_tag(*, tag_string):
+        """X.remove_gameplay_tag(tag_string) -> bool"""
+        return unreal.UnrealBridgeGameplayTagLibrary.remove_gameplay_tag(tag_string)
+
+    @staticmethod
+    def rename_gameplay_tag(*, old_tag, new_tag, rename_children=True):
+        """X.rename_gameplay_tag(old_tag, new_tag, rename_children=True) -> bool"""
+        return unreal.UnrealBridgeGameplayTagLibrary.rename_gameplay_tag(old_tag, new_tag, rename_children)
 
 
 class Level:

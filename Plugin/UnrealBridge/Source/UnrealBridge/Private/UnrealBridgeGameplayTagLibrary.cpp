@@ -3,6 +3,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "GameplayTagContainer.h"
+#include "GameplayTagsEditorModule.h"
 #include "GameplayTagsManager.h"
 
 namespace BridgeGameplayTagOps
@@ -176,4 +177,122 @@ FBridgeTagSourceInfo UUnrealBridgeGameplayTagLibrary::GetTagSourceInfo(const FSt
 #endif
 
 	return Info;
+}
+
+// ── Tag source enumeration ──────────────────────────────────────
+
+TArray<FBridgeTagSourceListing> UUnrealBridgeGameplayTagLibrary::ListTagSourceInis(
+	const FString& FilterType)
+{
+	TArray<FBridgeTagSourceListing> Result;
+	UGameplayTagsManager& TagsMgr = UGameplayTagsManager::Get();
+
+	// FindTagSourcesWithType is the only public window onto the otherwise-private
+	// TagSources map. Iterate every category and union the results.
+	static const TArray<EGameplayTagSourceType> AllTypes = {
+		EGameplayTagSourceType::Native,
+		EGameplayTagSourceType::DefaultTagList,
+		EGameplayTagSourceType::TagList,
+		EGameplayTagSourceType::RestrictedTagList,
+		EGameplayTagSourceType::DataTable,
+	};
+
+	const FName FilterFName = FilterType.IsEmpty() ? NAME_None : FName(*FilterType);
+
+	for (EGameplayTagSourceType Type : AllTypes)
+	{
+		const FString TypeName = BridgeGameplayTagOps::SourceTypeToString(Type);
+		if (!FilterFName.IsNone() && TypeName != FilterType) continue;
+
+		TArray<const FGameplayTagSource*> Sources;
+		TagsMgr.FindTagSourcesWithType(Type, Sources);
+
+		for (const FGameplayTagSource* Source : Sources)
+		{
+			if (!Source) continue;
+			FBridgeTagSourceListing Entry;
+			Entry.SourceName = Source->SourceName.ToString();
+			Entry.SourceType = TypeName;
+			Entry.ConfigFilePath = BridgeGameplayTagOps::ResolveSourceLocation(Source);
+			// Native sources require C++ edits — not writable from here.
+			// DataTable would need DataTable-row mutation, also not yet wired.
+			// Anything ini-backed (DefaultTagList / TagList / RestrictedTagList)
+			// IS writable via IGameplayTagsEditorModule.
+			switch (Type)
+			{
+				case EGameplayTagSourceType::DefaultTagList:
+				case EGameplayTagSourceType::TagList:
+				case EGameplayTagSourceType::RestrictedTagList:
+					Entry.bIsWritable = true;
+					break;
+				default:
+					Entry.bIsWritable = false;
+					break;
+			}
+			Result.Add(MoveTemp(Entry));
+		}
+	}
+
+	return Result;
+}
+
+// ── Mutations ───────────────────────────────────────────────────
+
+bool UUnrealBridgeGameplayTagLibrary::AddGameplayTag(
+	const FString& NewTag, const FString& SourceIni,
+	const FString& Comment, bool bIsRestricted)
+{
+	if (NewTag.IsEmpty()) return false;
+	if (!IGameplayTagsEditorModule::IsAvailable())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("AddGameplayTag: GameplayTagsEditor module unavailable"));
+		return false;
+	}
+
+	const FName SourceFName = SourceIni.IsEmpty() ? NAME_None : FName(*SourceIni);
+	return IGameplayTagsEditorModule::Get().AddNewGameplayTagToINI(
+		NewTag, Comment, SourceFName, bIsRestricted, /*bAllowNonRestrictedChildren=*/true);
+}
+
+bool UUnrealBridgeGameplayTagLibrary::RenameGameplayTag(
+	const FString& OldTag, const FString& NewTag, bool bRenameChildren)
+{
+	if (OldTag.IsEmpty() || NewTag.IsEmpty() || OldTag == NewTag) return false;
+	if (!IGameplayTagsEditorModule::IsAvailable())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RenameGameplayTag: GameplayTagsEditor module unavailable"));
+		return false;
+	}
+
+	// UE's RenameTagInINI does NOT validate that OldTag exists — it cheerfully
+	// writes a redirect for any string pair, leaving useless +GameplayTagRedirects
+	// lines in the ini. Guard up-front: only rename real tags.
+	UGameplayTagsManager& TagsMgr = UGameplayTagsManager::Get();
+	if (!TagsMgr.FindTagNode(FName(*OldTag)).IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RenameGameplayTag: '%s' not registered"), *OldTag);
+		return false;
+	}
+
+	return IGameplayTagsEditorModule::Get().RenameTagInINI(OldTag, NewTag, bRenameChildren);
+}
+
+bool UUnrealBridgeGameplayTagLibrary::RemoveGameplayTag(const FString& TagString)
+{
+	if (TagString.IsEmpty()) return false;
+	if (!IGameplayTagsEditorModule::IsAvailable())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RemoveGameplayTag: GameplayTagsEditor module unavailable"));
+		return false;
+	}
+
+	UGameplayTagsManager& TagsMgr = UGameplayTagsManager::Get();
+	const TSharedPtr<FGameplayTagNode> Node = TagsMgr.FindTagNode(FName(*TagString));
+	if (!Node.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RemoveGameplayTag: '%s' not in tag manager"), *TagString);
+		return false;
+	}
+
+	return IGameplayTagsEditorModule::Get().DeleteTagFromINI(Node);
 }

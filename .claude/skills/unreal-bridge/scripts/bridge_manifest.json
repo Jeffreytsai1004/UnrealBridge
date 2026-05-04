@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-05-04T14:40:43+00:00",
+  "generated_at": "2026-05-04T15:29:00+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -11481,6 +11481,36 @@
     },
     "UnrealBridgeGameplayTagLibrary": {
       "functions": {
+        "add_gameplay_tag": {
+          "doc": "X.add_gameplay_tag(new_tag, source_ini=\"\", comment=\"\", is_restricted=False) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "new_tag",
+              "type": ""
+            },
+            {
+              "default": "\"\"",
+              "has_default": true,
+              "name": "source_ini",
+              "type": ""
+            },
+            {
+              "default": "\"\"",
+              "has_default": true,
+              "name": "comment",
+              "type": ""
+            },
+            {
+              "default": "False",
+              "has_default": true,
+              "name": "is_restricted",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
         "find_assets_referencing_tag": {
           "doc": "X.find_assets_referencing_tag(tag_string, include_children, package_path_filter, max_results) -> Array[str]",
           "params": [
@@ -11540,6 +11570,54 @@
             }
           ],
           "returns": "Array[str]"
+        },
+        "list_tag_source_inis": {
+          "doc": "X.list_tag_source_inis(filter_type=\"\") -> Array[BridgeTagSourceListing]",
+          "params": [
+            {
+              "default": "\"\"",
+              "has_default": true,
+              "name": "filter_type",
+              "type": ""
+            }
+          ],
+          "returns": "Array[BridgeTagSourceListing]"
+        },
+        "remove_gameplay_tag": {
+          "doc": "X.remove_gameplay_tag(tag_string) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "tag_string",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "rename_gameplay_tag": {
+          "doc": "X.rename_gameplay_tag(old_tag, new_tag, rename_children=True) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "old_tag",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "new_tag",
+              "type": ""
+            },
+            {
+              "default": "True",
+              "has_default": true,
+              "name": "rename_children",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
         }
       }
     },
@@ -17903,6 +17981,12 @@
       "source_location",
       "source_type",
       "tag_string"
+    ],
+    "BridgeTagSourceListing": [
+      "config_file_path",
+      "is_writable",
+      "source_name",
+      "source_type"
     ],
     "BridgeTextureInfo": [
       "asset_path",

@@ -60,8 +60,42 @@ struct FBridgeTagSourceInfo
 };
 
 /**
- * GameplayTag-specific lookup helpers built on top of the AssetRegistry's
- * SearchableName index and UGameplayTagsManager.
+ * One entry from the registered tag-source list (an ini file, native
+ * declaration, or DataTable that contributes tags to UGameplayTagsManager).
+ */
+USTRUCT(BlueprintType)
+struct FBridgeTagSourceListing
+{
+	GENERATED_BODY()
+
+	/** Source FName as the manager knows it (e.g. "DefaultGameplayTags.ini",
+	 *  "MyMod.ini", "Native", or a DataTable's package name). Pass this back
+	 *  as the SourceIni argument to AddGameplayTag when you want the tag
+	 *  written to a specific source. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|GameplayTag")
+	FString SourceName;
+
+	/** EGameplayTagSourceType: "Native" | "DefaultTagList" | "TagList" |
+	 *  "RestrictedTagList" | "DataTable". */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|GameplayTag")
+	FString SourceType;
+
+	/** Resolved on-disk path for ini-backed sources; empty for Native /
+	 *  DataTable sources where the SourceName itself is the locator. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|GameplayTag")
+	FString ConfigFilePath;
+
+	/** True if the bridge mutation APIs (AddGameplayTag / RenameGameplayTag /
+	 *  RemoveGameplayTag) can write to this source. False for Native — those
+	 *  tags require C++ source edits — and (for the moment) DataTable, which
+	 *  needs row edits via the DataTable library. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|GameplayTag")
+	bool bIsWritable = false;
+};
+
+/**
+ * GameplayTag-specific helpers built on top of the AssetRegistry's
+ * SearchableName index, UGameplayTagsManager, and IGameplayTagsEditorModule.
  *
  * For generic SearchableName queries (PrimaryAssetId, GameplayCueTag,
  * project-defined named values) use UnrealBridgeAssetLibrary directly:
@@ -118,4 +152,79 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|GameplayTag")
 	static FBridgeTagSourceInfo GetTagSourceInfo(const FString& TagString);
+
+	// ── Tag source enumeration ──────────────────────────────────────
+
+	/**
+	 * Every place tags can come from in this project — ini files, native
+	 * code modules, DataTables. Pass the returned `source_name` as
+	 * `SourceIni` to `AddGameplayTag` to control where a new tag lands.
+	 *
+	 * @param FilterType  Optional. One of "Native", "DefaultTagList",
+	 *                    "TagList", "RestrictedTagList", "DataTable".
+	 *                    Empty = all types.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|GameplayTag")
+	static TArray<FBridgeTagSourceListing> ListTagSourceInis(const FString& FilterType = TEXT(""));
+
+	// ── Mutations (write to ini / patch redirectors) ────────────────
+	//
+	// All three write to disk via IGameplayTagsEditorModule. Operations
+	// against Native-source tags fail — those live in C++ source.
+	// Restricted tags require special handling and are not yet exposed.
+
+	/**
+	 * Add a new GameplayTag, optionally choosing which source ini to write
+	 * to. Empty `SourceIni` = the project's default
+	 * (Config/DefaultGameplayTags.ini).
+	 *
+	 * @param NewTag        Full tag string, e.g. "Combat.Stun".
+	 * @param SourceIni     Source name as returned by ListTagSourceInis,
+	 *                      e.g. "DefaultGameplayTags.ini" or
+	 *                      "MyMod.ini". Empty = default.
+	 * @param Comment       Optional dev comment.
+	 * @param bIsRestricted Restricted tag (rarely needed). Defaults to false.
+	 * @return true on success; false if the tag already exists, the source
+	 *         doesn't exist, or the editor module rejected the write.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|GameplayTag")
+	static bool AddGameplayTag(
+		const FString& NewTag,
+		const FString& SourceIni = TEXT(""),
+		const FString& Comment = TEXT(""),
+		bool bIsRestricted = false);
+
+	/**
+	 * Rename a GameplayTag in-place (in its source ini). UE auto-inserts a
+	 * `+GameplayTagRedirects=(OldTagName=...,NewTagName=...)` line so that
+	 * existing asset references continue to resolve to the new name —
+	 * *don't* also call this manually.
+	 *
+	 * @param OldTag           Existing full tag string.
+	 * @param NewTag           Replacement full tag string.
+	 * @param bRenameChildren  Also rename every child tag (Combat → CombatV2
+	 *                         renames Combat.Hit → CombatV2.Hit etc.).
+	 *                         Defaults to true.
+	 * @return true on success; false if OldTag doesn't exist, NewTag already
+	 *         exists, or the editor module rejected the rename.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|GameplayTag")
+	static bool RenameGameplayTag(
+		const FString& OldTag,
+		const FString& NewTag,
+		bool bRenameChildren = true);
+
+	/**
+	 * Delete a GameplayTag from its source ini. Use
+	 * `find_assets_referencing_tag(tag, include_children=True)` first to
+	 * confirm zero references — UE doesn't insert a redirect on delete, and
+	 * stale asset references will surface as warnings on next load.
+	 *
+	 * Native tags can't be deleted via this API; remove them from C++ source.
+	 *
+	 * @return true on success; false if the tag doesn't exist or the editor
+	 *         module rejected the delete (e.g. tag is native).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|GameplayTag")
+	static bool RemoveGameplayTag(const FString& TagString);
 };

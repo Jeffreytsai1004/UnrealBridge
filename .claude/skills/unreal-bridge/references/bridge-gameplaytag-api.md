@@ -104,18 +104,80 @@ Source type semantics:
 
 ---
 
-## Not in this library (don't invent these)
+---
 
-This library is **read-only**. Do not assume a `rename_*` / `add_*` / `remove_*` / `redirect_*` / `register_*` UFUNCTION exists — none does. If you're tempted to suggest one in a recommendation, stop and use the real UE mechanism below instead.
+## Tag source enumeration
 
-| Want to do | Real way |
+### list_tag_source_inis(filter_type) -> list[BridgeTagSourceListing]
+
+Every place this project's tags can come from — ini files, native code modules, DataTables. Pass the returned `source_name` as the `source_ini` argument to `add_gameplay_tag(...)` to control where a new tag lands.
+
+```python
+sources = gtl.list_tag_source_inis('')           # all sources
+inis    = gtl.list_tag_source_inis('DefaultTagList')  # just the project's primary ini
+for s in sources:
+    print(s.source_name, s.source_type, 'writable' if s.is_writable else '(read-only)')
+```
+
+`filter_type` accepts: `''`, `'Native'`, `'DefaultTagList'`, `'TagList'`, `'RestrictedTagList'`, `'DataTable'`.
+
+`BridgeTagSourceListing` fields:
+
+| field | meaning |
 |---|---|
-| Rename a tag without breaking references | Add a `+GameplayTagRedirects=(OldTagName=...,NewTagName=...)` line to `Config/DefaultGameplayTags.ini` `[/Script/GameplayTags.GameplayTagsSettings]`, then edit the canonical tag entry. UE applies the redirect on next load. The editor's right-click → "Rename" does this for you when invoked manually. |
-| Add a new tag | Edit `Config/DefaultGameplayTags.ini` (`+GameplayTagList=(Tag="Foo.Bar",DevComment="...")`) or use the editor's GameplayTag picker → "Add New Tag". |
-| Remove a tag | Delete the `+GameplayTagList=(Tag=...)` line from the source ini / DataTable. Use `find_assets_referencing_tag(..., include_children=True)` first to confirm zero references. Add a `GameplayTagRedirects` to None for any stragglers. |
-| Programmatically write to tag config from Python | No bridge UFUNCTION. The agent should hand the user the ini edit instructions and let them apply it (or call out to a generic file-write step outside the bridge). |
+| `source_name` | FName-as-string. Pass to `add_gameplay_tag(source_ini=...)`. |
+| `source_type` | One of the EGameplayTagSourceType strings above. |
+| `config_file_path` | Resolved on-disk path for ini-backed sources; empty for Native/DataTable. |
+| `is_writable` | True when the bridge's mutation APIs can target this source (DefaultTagList / TagList / RestrictedTagList only). Native = C++ source edit required; DataTable = use the DataTable library. |
 
-The full set of UFUNCTIONs in this library is exactly the three documented above (`find_assets_referencing_tag`, `list_all_registered_tags`, `get_tag_source_info`). The auto-generated `bridge_manifest.json` is the source of truth — preflight will reject calls to anything else.
+---
+
+## Mutations
+
+These three write to disk via `IGameplayTagsEditorModule`. Native-source tags can't be written from Python — they live in C++ source. Restricted tags use a separate flow not yet exposed.
+
+### add_gameplay_tag(new_tag, source_ini='', comment='', is_restricted=False) -> bool
+
+Add a new GameplayTag. `source_ini=''` writes to the project's default (`Config/DefaultGameplayTags.ini`); pass a `source_name` from `list_tag_source_inis(...)` to target a specific ini.
+
+```python
+ok = gtl.add_gameplay_tag('Combat.Stun', '', 'Stuns the target for N seconds')
+# Or target a specific source:
+ok = gtl.add_gameplay_tag('UI.Modal.Inventory', 'MyMod.ini', '')
+```
+
+Returns False if the tag already exists, the source isn't found, or the editor module rejected the write.
+
+### rename_gameplay_tag(old_tag, new_tag, rename_children=True) -> bool
+
+Rename a tag in-place. UE auto-inserts a `+GameplayTagRedirects=(OldTagName=...,NewTagName=...)` line so existing asset references continue to resolve to the new name — **don't** also write the redirect manually.
+
+```python
+ok = gtl.rename_gameplay_tag('Combat.Hit', 'Combat.HitImpact', rename_children=True)
+# rename_children=True also renames Combat.Hit.Critical → Combat.HitImpact.Critical
+```
+
+This wrapper validates `old_tag` is registered before delegating to UE — without that guard, `IGameplayTagsEditorModule::RenameTagInINI` would happily write a redirect for a non-existent tag, leaving useless `+GameplayTagRedirects=` litter in the ini. Returns False if `old_tag` doesn't exist.
+
+### remove_gameplay_tag(tag) -> bool
+
+Delete a tag from its source ini.
+
+```python
+# ALWAYS check references first — UE doesn't insert a redirect on delete,
+# so dangling references will surface as warnings on next load.
+refs = gtl.find_assets_referencing_tag('Combat.OldTag', True, '/Game', 0)
+if not refs:
+    gtl.remove_gameplay_tag('Combat.OldTag')
+```
+
+Returns False if the tag doesn't exist or is native-defined.
+
+**Caveats common to all three mutations:**
+- Run from the editor (not cooked builds — these APIs need `IGameplayTagsEditorModule`).
+- Changes write to disk **immediately** but the manager's in-memory tree refresh is what makes subsequent calls see the new state — which happens automatically.
+- The editor periodically saves its in-memory tag state back to source inis. Direct manual edits to a tag ini while the editor is running risk being overwritten on shutdown — prefer these APIs over hand-editing the ini in a running session.
+- After `rename_*` followed by `remove_*` of the new name, the redirect line for `old → new` is also cleaned up by UE. After a manual delete of the source-ini line in a stopped editor, dangling redirects can accumulate — clean them by hand.
 
 ---
 
