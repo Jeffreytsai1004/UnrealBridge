@@ -94,6 +94,31 @@ struct FBridgeTagSourceListing
 };
 
 /**
+ * One `+GameplayTagRedirects=(OldTagName="X",NewTagName="Y")` entry as
+ * stored in some source ini. Returned by ListGameplayTagRedirects so an
+ * agent can enumerate-then-clean without having to remember every (old,
+ * new) pair it created.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeTagRedirectEntry
+{
+	GENERATED_BODY()
+
+	/** OldTagName in the redirect — the string that gets remapped on lookup. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|GameplayTag")
+	FString OldTag;
+
+	/** NewTagName — the resolved tag. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|GameplayTag")
+	FString NewTag;
+
+	/** Source FName (e.g. "DefaultGameplayTags.ini") this redirect lives in.
+	 *  Pass back to remove_gameplay_tag_redirect via the (old, new) pair. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|GameplayTag")
+	FString SourceName;
+};
+
+/**
  * GameplayTag-specific helpers built on top of the AssetRegistry's
  * SearchableName index, UGameplayTagsManager, and IGameplayTagsEditorModule.
  *
@@ -247,4 +272,23 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|GameplayTag")
 	static bool RemoveGameplayTagRedirect(const FString& OldTag, const FString& NewTag);
+
+	/**
+	 * Enumerate every `+GameplayTagRedirects=` entry currently registered in
+	 * any writable source. Use to drive enumerate-then-sweep workflows
+	 * (e.g. "list every orphan redirect and remove it") without having to
+	 * remember the (old, new) pairs you wrote earlier.
+	 *
+	 * @param SourceIniFilter   Optional source FName to scope to (e.g.
+	 *                          "DefaultGameplayTags.ini"). Empty = all
+	 *                          writable sources.
+	 * @param OldTagPrefixFilter  Optional prefix to filter `OldTag` by
+	 *                          (e.g. "Combat." to find every redirect
+	 *                          whose OldTag is under Combat).
+	 *                          Empty = no filter.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|GameplayTag")
+	static TArray<FBridgeTagRedirectEntry> ListGameplayTagRedirects(
+		const FString& SourceIniFilter = TEXT(""),
+		const FString& OldTagPrefixFilter = TEXT(""));
 };

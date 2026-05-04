@@ -541,3 +541,53 @@ bool UUnrealBridgeGameplayTagLibrary::RemoveGameplayTagRedirect(
 		*OldTag, *NewTag, *FoundSource->SourceName.ToString());
 	return true;
 }
+
+TArray<FBridgeTagRedirectEntry> UUnrealBridgeGameplayTagLibrary::ListGameplayTagRedirects(
+	const FString& SourceIniFilter, const FString& OldTagPrefixFilter)
+{
+	TArray<FBridgeTagRedirectEntry> Result;
+	UGameplayTagsManager& TagsMgr = UGameplayTagsManager::Get();
+
+	const FName SourceFilterFName = SourceIniFilter.IsEmpty() ? NAME_None : FName(*SourceIniFilter);
+
+	// RestrictedTagList uses URestrictedGameplayTagsList, which doesn't carry
+	// a GameplayTagRedirects array — only DefaultTagList / TagList do.
+	static const TArray<EGameplayTagSourceType> TypesWithRedirects = {
+		EGameplayTagSourceType::DefaultTagList,
+		EGameplayTagSourceType::TagList,
+	};
+
+	for (EGameplayTagSourceType Type : TypesWithRedirects)
+	{
+		TArray<const FGameplayTagSource*> Sources;
+		TagsMgr.FindTagSourcesWithType(Type, Sources);
+		for (const FGameplayTagSource* Source : Sources)
+		{
+			if (!Source || !Source->SourceTagList) continue;
+			if (!SourceFilterFName.IsNone() && Source->SourceName != SourceFilterFName) continue;
+
+			const FString SourceNameStr = Source->SourceName.ToString();
+			for (const FGameplayTagRedirect& R : Source->SourceTagList->GameplayTagRedirects)
+			{
+				if (R.OldTagName.IsNone() || R.NewTagName.IsNone()) continue;
+
+				FString OldStr = R.OldTagName.ToString();
+				// Tags are case-sensitive (Statetree != StateTree); filter must match.
+				if (!OldTagPrefixFilter.IsEmpty()
+					&& !OldStr.StartsWith(OldTagPrefixFilter, ESearchCase::CaseSensitive)) continue;
+
+				FBridgeTagRedirectEntry Entry;
+				Entry.OldTag = MoveTemp(OldStr);
+				Entry.NewTag = R.NewTagName.ToString();
+				Entry.SourceName = SourceNameStr;
+				Result.Add(MoveTemp(Entry));
+			}
+		}
+	}
+
+	Result.Sort([](const FBridgeTagRedirectEntry& A, const FBridgeTagRedirectEntry& B)
+	{
+		return A.OldTag < B.OldTag;
+	});
+	return Result;
+}

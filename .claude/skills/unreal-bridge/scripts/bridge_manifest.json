@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-05-04T16:04:24+00:00",
+  "generated_at": "2026-05-04T16:12:45+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -11571,6 +11571,24 @@
           ],
           "returns": "Array[str]"
         },
+        "list_gameplay_tag_redirects": {
+          "doc": "X.list_gameplay_tag_redirects(source_ini_filter=\"\", old_tag_prefix_filter=\"\") -> Array[BridgeTagRedirectEntry]",
+          "params": [
+            {
+              "default": "\"\"",
+              "has_default": true,
+              "name": "source_ini_filter",
+              "type": ""
+            },
+            {
+              "default": "\"\"",
+              "has_default": true,
+              "name": "old_tag_prefix_filter",
+              "type": ""
+            }
+          ],
+          "returns": "Array[BridgeTagRedirectEntry]"
+        },
         "list_tag_source_inis": {
           "doc": "X.list_tag_source_inis(filter_type=\"\") -> Array[BridgeTagSourceListing]",
           "params": [
@@ -17973,6 +17991,11 @@
       "loaded",
       "package_name",
       "visible"
+    ],
+    "BridgeTagRedirectEntry": [
+      "new_tag",
+      "old_tag",
+      "source_name"
     ],
     "BridgeTagReference": [
       "asset_class",

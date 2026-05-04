@@ -159,6 +159,28 @@ ok = gtl.rename_gameplay_tag('Combat.Hit', 'Combat.HitImpact', rename_children=T
 
 This wrapper validates `old_tag` is registered before delegating to UE — without that guard, `IGameplayTagsEditorModule::RenameTagInINI` would happily write a redirect for a non-existent tag, leaving useless `+GameplayTagRedirects=` litter in the ini. Returns False if `old_tag` doesn't exist.
 
+### list_gameplay_tag_redirects(source_ini_filter='', old_tag_prefix_filter='') -> list[BridgeTagRedirectEntry]
+
+Enumerate every `+GameplayTagRedirects=` entry in the project. Use to drive enumerate-then-sweep workflows without having to remember (old, new) pairs.
+
+```python
+# Every redirect across all writable sources
+all_redirects = gtl.list_gameplay_tag_redirects('', '')
+for r in all_redirects:
+    print(f'{r.source_name}: {r.old_tag} -> {r.new_tag}')
+
+# All Combat.* redirects in DefaultGameplayTags.ini
+combat = gtl.list_gameplay_tag_redirects('DefaultGameplayTags.ini', 'Combat.')
+
+# Sweep every orphan under Foley.* in one pass
+for o in gtl.list_gameplay_tag_redirects('', 'Foley.'):
+    gtl.remove_gameplay_tag_redirect(o.old_tag, o.new_tag)
+```
+
+`source_ini_filter` defaults to all writable sources; `old_tag_prefix_filter` defaults to no filter (and is **case-sensitive** to match GameplayTag semantics — `Statetree.` does NOT match `StateTree.`). Restricted-tag sources don't carry redirects in this UE version, so they're never enumerated.
+
+`BridgeTagRedirectEntry` fields: `old_tag`, `new_tag`, `source_name` (the FName the manager indexes the source by — pass to `remove_gameplay_tag_redirect` paired with old/new).
+
 ### remove_gameplay_tag_redirect(old_tag, new_tag) -> bool
 
 Drop a `+GameplayTagRedirects=(OldTagName="X",NewTagName="Y")` entry from the project's tag config. Use when undoing a mistaken rename or sweeping an orphan redirect.

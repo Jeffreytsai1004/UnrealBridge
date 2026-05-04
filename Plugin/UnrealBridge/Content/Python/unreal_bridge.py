@@ -16,7 +16,7 @@ structural rather than mnemonic.
 
 import unreal
 
-_GENERATED_AT = '2026-05-04T16:04:24+00:00'
+_GENERATED_AT = '2026-05-04T16:12:45+00:00'
 _UE_VERSION = '5.7.1-48512491+++UE5+Release-5.7'
 
 class Anim:
@@ -3157,6 +3157,11 @@ class GameplayTag:
     def list_all_registered_tags(*, filter_prefix, max_results):
         """X.list_all_registered_tags(filter_prefix, max_results) -> Array[str]"""
         return unreal.UnrealBridgeGameplayTagLibrary.list_all_registered_tags(filter_prefix, max_results)
+
+    @staticmethod
+    def list_gameplay_tag_redirects(*, source_ini_filter="", old_tag_prefix_filter=""):
+        """X.list_gameplay_tag_redirects(source_ini_filter="", old_tag_prefix_filter="") -> Array[BridgeTagRedirectEntry]"""
+        return unreal.UnrealBridgeGameplayTagLibrary.list_gameplay_tag_redirects(source_ini_filter, old_tag_prefix_filter)
 
     @staticmethod
     def list_tag_source_inis(*, filter_type=""):
