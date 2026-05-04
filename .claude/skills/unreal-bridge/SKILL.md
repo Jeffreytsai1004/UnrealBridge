@@ -69,7 +69,7 @@ The wrapper has 16 classes (one per `UnrealBridge*Library`) with **kwargs-only s
 
 Fallback: raw `unreal.UnrealBridge*Library.foo(...)` works (preflight catches errors), but prefer the wrapper.
 
-## AST preflight (automatic)
+## AST preflight (automatic — safety net only)
 
 Every `exec*` call runs an AST preflight in the bridge client BEFORE sending. Reads `scripts/bridge_manifest.json` and rejects locally (exit 3, no UE round-trip) when:
 
@@ -78,6 +78,8 @@ Every `exec*` call runs an AST preflight in the bridge client BEFORE sending. Re
 - `unreal.BridgeXxx.YYY` enum member doesn't exist
 
 Type validation is NOT done by preflight. Wrong asset paths / wrong scope still surface at runtime — references prose still matters for those.
+
+**Treat preflight as a backstop, not a planning tool.** If you write code expecting preflight to autocorrect your guesses, you'll produce noisy output and still hit runtime tracebacks for the half it can't catch (USTRUCT field names, Python attribute access, EditDefaultsOnly violations). See "Verify before you call" below.
 
 Bypass with `--no-preflight` (rare). Preview with `bridge.py preflight <path>`.
 
@@ -92,21 +94,16 @@ Bypass with `--no-preflight` (rare). Preview with `bridge.py preflight <path>`.
 | `print('中文' / '한글' / '日本語')` shows `���` or `涓枃` mojibake | Almost always **display-only** — the wire is byte-perfect UTF-8. See "Non-ASCII output (CJK / Greek / emoji)" below. |
 | Need "where is this GameplayTag used?" / Find References on a tag | `unreal.UnrealBridgeGameplayTagLibrary.find_assets_referencing_tag(tag, include_children, ...)`. Mutations: `add_gameplay_tag` / `rename_gameplay_tag` (auto-redirect) / `remove_gameplay_tag`; pick the target ini via `list_tag_source_inis(...)`. For `PrimaryAssetId` / other named-value structs use the generic `UnrealBridgeAssetLibrary.find_assets_referencing_searchable_name(struct_type, value, ...)`. See `bridge-gameplaytag-api.md`. |
 
-## Reading UE object attributes — never `<obj>.<attr>`
+## Verify before you call — don't lean on preflight
 
-Guessing attribute names on a UE object reference is the **#1 remaining hallucination source**. The bridge has a generic property pipeline:
+Preflight is a **safety net**, not a planning tool. Writing code from imagined API / field / attribute names and waiting for preflight to tell you the right one produces noisy output (4-8 `[WARN]` per script, often still ending in a runtime traceback) and wastes round-trips. **Verify FIRST, then write the script.** Four axes:
 
-```python
-from unreal_bridge import Level
-props = Level.list_actor_properties(actor_name='/Persistent/MyActor')
-# OR before spawning:
-props = Level.list_class_properties(class_path='/Script/Engine.SkyAtmosphere')
-# Read by name (dotted paths supported):
-loc = Level.get_actor_property(actor_name='/Persistent/MyActor',
-                               property_path='RootComponent.RelativeLocation')
-```
+1. **Bridge function names** — `grep scripts/bridge_manifest.json` or read the relevant `references/bridge-*-api.md`. Don't translate the C++ name into snake_case in your head and assume.
+2. **Bridge USTRUCT return-value fields** — return types like `BridgeGameplayEffectInfo` keep a *minimum* set of fields (not exhaustive); UE 5.x evolves struct shape between versions. Look up the fields in `bridge_manifest.json` `structs` section, OR run a one-off probe `print([a for a in dir(obj) if not a.startswith('_')])` BEFORE writing the consumer code.
+3. **UE object attributes** — never `<obj>.<attr>`. Always `get_editor_property` (and respect `protected:` / `EditDefaultsOnly` rejection). Use `Level.list_actor_properties(actor_name=...)` or `Level.list_class_properties(class_path=...)` to list first.
+4. **Function signatures** — when unsure: `unreal.UnrealBridgeXxx.fn.__doc__` first line is the signature. Cheaper than a guess + correction round-trip.
 
-If you find yourself typing `<some_var>.attribute_name` on a UE object — **stop**, list properties first.
+**Symptom you're in the bad loop**: your last few exec attempts produced `[WARN]` lines from preflight followed by `AttributeError` tracebacks. **Stop**, run one heredoc with `dir()` / manifest grep, then write the real script.
 
 ## Never silently bail to raw `unreal.*`
 
