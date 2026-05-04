@@ -45,15 +45,18 @@ flowchart LR
     subgraph Host["Agent host"]
       CLI["bridge.py"]
       Pre["AST preflight<br/>(local — rejects bad calls<br/>before TCP send)"]
-      Mani[("bridge_manifest.json<br/>18 libraries · 876 UFUNCTIONs<br/>regen via tools/gen_manifest.py")]
+      Mani[("bridge_manifest.json<br/>18 libs · 876 UFUNCTIONs")]
     end
+
+    Gen["tools/gen_manifest.py<br/>scans C++ headers"]
 
     subgraph UE["Unreal Editor 5.4+"]
       Disc["FUnrealBridgeDiscovery<br/>UDP responder"]
       Server["FUnrealBridgeServer<br/>TCP · length-prefixed JSON"]
-      Wrap["unreal_bridge<br/>kwargs-only Python wrapper"]
+      Reactive["UnrealBridgeReactiveSubsystem<br/>+ 10 event adapters"]
+      Exec["IPythonScriptPlugin::<br/>ExecPythonCommandEx<br/>(GameThread)"]
+      Wrap["unreal_bridge<br/>kwargs-only wrapper<br/>(optional safer surface)"]
       Libs["18× UnrealBridge*Library"]
-      Reactive["UnrealBridgeReactiveSubsystem<br/>persistent event handlers"]
       Engine["UEditor · UWorld · Assets"]
     end
 
@@ -61,13 +64,19 @@ flowchart LR
     CLI -- "AST gate" --> Pre
     Pre -. "lookup" .-> Mani
 
+    Gen -- "writes" --> Mani
+    Gen -- "writes" --> Wrap
+
     CLI -- "UDP probe<br/>239.255.42.99:9876" --> Disc
     CLI -- "TCP / JSON<br/>(port from discovery)" --> Server
-    Server -- "GameThread<br/>ExecPythonCommandEx" --> Wrap
+    Server -- "RPC script" --> Exec
+    Engine -. "delegate fires" .-> Reactive
+    Reactive -- "handler script" --> Exec
+
+    Exec -- "user code calls" --> Libs
+    Exec -. "or via" .-> Wrap
     Wrap --> Libs
     Libs --> Engine
-    Engine -. "event fires" .-> Reactive
-    Reactive -. "invoke stored script" .-> Libs
 ```
 
 ## Quick Start

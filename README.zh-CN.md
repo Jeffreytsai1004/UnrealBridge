@@ -45,15 +45,18 @@ flowchart LR
     subgraph Host["Agent 主机"]
       CLI["bridge.py"]
       Pre["AST preflight<br/>（本地 — 调用前拦截，<br/>不发起 TCP）"]
-      Mani[("bridge_manifest.json<br/>18 个库 · 876 UFUNCTION<br/>由 tools/gen_manifest.py 重生成")]
+      Mani[("bridge_manifest.json<br/>18 个库 · 876 UFUNCTION")]
     end
+
+    Gen["tools/gen_manifest.py<br/>扫 C++ 头文件"]
 
     subgraph UE["Unreal Editor 5.4+"]
       Disc["FUnrealBridgeDiscovery<br/>UDP 应答"]
       Server["FUnrealBridgeServer<br/>TCP · 长度前缀 JSON"]
-      Wrap["unreal_bridge<br/>kwargs-only Python 包装"]
+      Reactive["UnrealBridgeReactiveSubsystem<br/>+ 10 个事件适配器"]
+      Exec["IPythonScriptPlugin::<br/>ExecPythonCommandEx<br/>（GameThread）"]
+      Wrap["unreal_bridge<br/>kwargs-only 包装<br/>（可选的更安全入口）"]
       Libs["18× UnrealBridge*Library"]
-      Reactive["UnrealBridgeReactiveSubsystem<br/>常驻事件处理器"]
       Engine["UEditor · UWorld · Assets"]
     end
 
@@ -61,13 +64,19 @@ flowchart LR
     CLI -- "AST 拦截" --> Pre
     Pre -. "查表" .-> Mani
 
+    Gen -- "生成" --> Mani
+    Gen -- "生成" --> Wrap
+
     CLI -- "UDP 探测<br/>239.255.42.99:9876" --> Disc
     CLI -- "TCP / JSON<br/>（端口由发现得到）" --> Server
-    Server -- "GameThread<br/>ExecPythonCommandEx" --> Wrap
+    Server -- "RPC 脚本" --> Exec
+    Engine -. "委托触发" .-> Reactive
+    Reactive -- "事件脚本" --> Exec
+
+    Exec -- "用户代码调用" --> Libs
+    Exec -. "或经由" .-> Wrap
     Wrap --> Libs
     Libs --> Engine
-    Engine -. "事件触发" .-> Reactive
-    Reactive -. "执行注册脚本" .-> Libs
 ```
 
 ## 快速开始
