@@ -58,6 +58,8 @@ for p in paths:
 EOF
 ```
 
+**Windows path gotcha (Bash tool only):** unquoted backslashes get eaten by bash word-splitting — `python G:\Claude\UnrealBridge\.claude\skills\unreal-bridge\scripts\bridge.py exec ...` arrives as `G:ClaudeUnrealBridge.claudeskillsunreal-bridgescriptsbridge.py` and fails with "No such file or directory". Use forward slashes (`G:/Claude/...`) or single-quote the path (`'G:\Claude\...'`). The body inside `<<'EOF' ... EOF` is literal and unaffected — only the arg before the heredoc matters. PowerShell tool is unaffected.
+
 ## API surface — use the wrapper module first
 
 ```python
