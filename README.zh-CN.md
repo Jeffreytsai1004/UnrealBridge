@@ -36,7 +36,7 @@ UnrealBridge 是一个面向 AI Agent 的 Unreal Engine 编辑器桥接层，围
 
 ## 亮点
 
-- **基于 AST 的防幻觉契约层。** 用户脚本到达 UE 之前，`bridge_preflight.py` 先用 Python AST 解析，对照自动生成的清单（17 个库 × 869 UFUNCTION）逐一校验每个 `unreal.UnrealBridge*Library.fn(...)` 调用——**不回到编辑器** 就能拦下不存在的库 / 函数名（带 did-you-mean）、错误的位置参数数量、未知关键字、不存在的桥接枚举成员。第二层把 `AssetRegistry` / `GameplayStatics` 的裸调用模式重定向到桥接等价物，并追踪每个返回值的实际类型，在对 `str` / `SoftObjectPath` 这类绑定类型做属性访问时给出警告；UE 对象抛出真正的 `AttributeError` 时则回查 UE Python，列出该类实际反射的 `UPROPERTY` 并给出可粘贴的修正代码（自动处理 `snake_case` ↔ `PascalCase` 的差异）。第三层 ship 一份纯关键字参数的 Python wrapper 模块，让"位置参数顺序写错"在语法层面就不可能发生。三层叠加把新会话 agent 的桥接调用失败率从 **24% 降到 16%**（A/B 验证）——这是先前仅靠 `SKILL.md` 的"调用前先查文档"提示规则一直没能稳定做到的。
+- **基于 AST 的防幻觉契约层。** 用户脚本到达 UE 之前，`bridge_preflight.py` 先用 Python AST 解析，对照自动生成的清单（18 个库 × 876 UFUNCTION）逐一校验每个 `unreal.UnrealBridge*Library.fn(...)` 调用——**不回到编辑器** 就能拦下不存在的库 / 函数名（带 did-you-mean）、错误的位置参数数量、未知关键字、不存在的桥接枚举成员。第二层把 `AssetRegistry` / `GameplayStatics` 的裸调用模式重定向到桥接等价物，并追踪每个返回值的实际类型，在对 `str` / `SoftObjectPath` 这类绑定类型做属性访问时给出警告；UE 对象抛出真正的 `AttributeError` 时则回查 UE Python，列出该类实际反射的 `UPROPERTY` 并给出可粘贴的修正代码（自动处理 `snake_case` ↔ `PascalCase` 的差异）。第三层 ship 一份纯关键字参数的 Python wrapper 模块，让"位置参数顺序写错"在语法层面就不可能发生。三层叠加把新会话 agent 的桥接调用失败率从 **24% 降到 16%**（A/B 验证）——这是先前仅靠 `SKILL.md` 的"调用前先查文档"提示规则一直没能稳定做到的。
 
   <p align="center">
     <img src="docs/images/zh/02-preflight.png" alt="本地 AST 预检 · 不让幻觉抵达编辑器">
@@ -46,7 +46,7 @@ UnrealBridge 是一个面向 AI Agent 的 Unreal Engine 编辑器桥接层，围
 - **基于 Reactive 系统的事件订阅。** Agent 可订阅 GAS 事件、属性变化、Actor 生命周期、AnimNotify、输入、定时器，以及编辑器端的资产变更事件。在指定事件触发时由桥接层主动回调，无需 Agent 轮询——这是纯请求 / 响应式协议无法覆盖的场景。
 - **PIE 运行时的 Agent 控制接口。** `UnrealBridgeGameplayLibrary` 提供聚合式世界观测、导航寻路，以及移动 / 视角 / 跳跃等操作输入，适用于 AI 行为验证、自动化测试、游戏内 NPC 原型等运行时工作流。
 - **蓝图工具链。** 不仅仅是自动布局：`auto_layout_graph` 的 `pin_aligned` 策略读取 Slate 实时几何对齐 exec 轨道、`straighten_exec_chain` 把主干拉直、`collapse_nodes_to_function` 提取子图、`lint_blueprint` 按固定规则扫 orphan / 未命名节点 / 过大函数 / 无注释大图，`add_comment_box` + 预设配色（Section / Validation / Danger / Network / UI / Debug / Setup）让图谱分区可读；AnimGraph 与状态机还有专用的 `auto_layout_anim_graph` / `auto_layout_state_machine`（后者递归进入每个状态内部 + 规则图）。
-- **Python 原生执行。** 17 个 `UnrealBridge*Library` 累计约 870 个 `UFUNCTION`，覆盖常见子系统；未封装的能力可直接通过 `unreal.*` 原生 API 调用。相较于固定工具列表的 MCP 方案与仅暴露单一 `call` 命令的反射协议，该设计在灵活性与结构性之间取得了折衷。所有关卡写操作均包裹于 `FScopedTransaction` 内，支持标准 Undo / Redo。
+- **Python 原生执行。** 18 个 `UnrealBridge*Library` 累计约 880 个 `UFUNCTION`，覆盖常见子系统；未封装的能力可直接通过 `unreal.*` 原生 API 调用。相较于固定工具列表的 MCP 方案与仅暴露单一 `call` 命令的反射协议，该设计在灵活性与结构性之间取得了折衷。所有关卡写操作均包裹于 `FScopedTransaction` 内，支持标准 Undo / Redo。
 
 ## 架构
 
@@ -55,7 +55,7 @@ flowchart LR
     Agent["AI Agent"]
     CLI["bridge.py"]
     Server["FUnrealBridgeServer"]
-    Libs["UnrealBridge*Library<br/>(17 个库, ~870 UFUNCTION)"]
+    Libs["UnrealBridge*Library<br/>(18 个库, ~880 UFUNCTION)"]
     UE["Unreal Editor 5.4+"]
 
     Agent -- "shell" --> CLI
@@ -180,13 +180,14 @@ python .claude/skills/unreal-bridge/scripts/rebuild_relaunch.py  # 动到反射
 | `UnrealBridgeMaterialLibrary` | 材质实例参数查询 |
 | `UnrealBridgeUMGLibrary` | UMG 控件树、属性、动画、绑定、事件查询；按名称 / 类搜索控件；属性写入 |
 | `UnrealBridgeLevelLibrary` | Actor 查询（名称 / Class / Tag / Folder / 半径 / Box / 射线）与编辑（生成 / 销毁 / 变换 / 挂载 / 可见性 / Mobility、嵌套属性读写、函数调用）；地形高度剖面与 Trace 探测；编辑器内自定义 NavGraph（节点、边、最短路径、JSON 持久化）；正交俯视图与动画 Pose / Montage 时间轴截图；所有写操作走事务 |
-| `UnrealBridgeEditorLibrary` | 编辑器会话控制：资产开关 / 保存 / 加载；Content Browser 与视口；PIE 启停 / 模拟 / 暂停；Undo / Redo、控制台命令、CVar；蓝图批量编译、重定向修复；Live Coding 触发；截图、GBuffer 通道（Depth / DeviceDepth / Normal / BaseColor）与 HitProxy ID pass；标签页、通知、诊断信息。Bridge 自观测：调用日志（请求 ID、耗时、端点、输出大小的环形缓冲）、性能统计、签名注册表 JSON dump（一次性输出全部 ~870 个 `UFUNCTION` 的元信息） |
+| `UnrealBridgeEditorLibrary` | 编辑器会话控制：资产开关 / 保存 / 加载；Content Browser 与视口；PIE 启停 / 模拟 / 暂停；Undo / Redo、控制台命令、CVar；蓝图批量编译、重定向修复；Live Coding 触发；截图、GBuffer 通道（Depth / DeviceDepth / Normal / BaseColor）与 HitProxy ID pass；标签页、通知、诊断信息。Bridge 自观测：调用日志（请求 ID、耗时、端点、输出大小的环形缓冲）、性能统计、签名注册表 JSON dump（一次性输出全部 ~880 个 `UFUNCTION` 的元信息） |
 | `UnrealBridgeGameplayAbilityLibrary` | GameplayAbility / GameplayEffect / AttributeSet 蓝图元信息；Tag 层级与匹配；按 Tag 列出能力与效果；Actor 的 ASC 状态（属性值、激活 Ability / Effect、Cooldown 检查）；运行时发送 GameplayEvent、修改属性；GA / GE / GC 蓝图作者支持（CDO 编辑、GA 图节点、GE magnitude / component / 继承 Tag、GC Tag 设置） |
 | `UnrealBridgeGameplayTagLibrary` | GameplayTag 重构工作流：`find_assets_referencing_tag`（支持子 tag 展开）、`list_all_registered_tags`、`get_tag_source_info`。Mutation：`add_gameplay_tag` / `rename_gameplay_tag`（自动写 redirect，并针对 UE 5.7 的"redirect 静默丢失"问题做了持久化加固） / `remove_gameplay_tag`。源枚举 `list_tag_source_inis`；redirect 管理 `list_gameplay_tag_redirects` + `remove_gameplay_tag_redirect`，支持 enumerate-then-sweep 清理 |
 | `UnrealBridgePerfLibrary` | 结构化性能快照：帧时序（FPS / GT / RT / GPU / RHI ms，支持 stat-unit 与 raw 两种模式）、渲染计数器（draw calls / primitives，跨 GPU 求和）、进程内存、`TObjectIterator` 类直方图、ISO-8601 时间戳聚合快照。USTRUCT 直出，无需解析 `stat unit` 文本 |
 | `UnrealBridgeGameplayLibrary` | PIE 运行时 Agent 控制：聚合式世界观测、导航寻路；移动 / 视角 / 跳跃 / 传送 / 粘性输入、Enhanced Input 与 MappingContext；Pawn 速度、能力、跳跃轨迹模拟；相机射线、屏幕 ↔ 世界、NavMesh 投影；伤害、物理冲量、时间膨胀、音效、摄像机抖动；Debug 绘制；AI 控制器探测 |
 | `UnrealBridgeNavigationLibrary` | NavMesh 导出为 OBJ，便于外部可视化与几何分析 |
 | `UnrealBridgeReactive*` | 事件订阅框架，10 个 adapter：运行时（GameplayEvent、AttributeChanged、ActorLifecycle、MovementMode、AnimNotify、InputAction、Timer）与编辑器（AssetEvent、PieState、BpCompiled）；Handler 的注册 / 列表 / 暂停 / 恢复 / 统计；跨会话 JSON 持久化。替代轮询 |
+| `UnrealBridgePropertyLibrary` | **特权级通用 UPROPERTY 接口。** 用 `Foo.Bar[N].Baz` 点路径读写任意反射字段 —— 绕开 UE Python 绑定层的访问检查（"is protected and cannot be read" 报错、struct 副本上 EditDefaultsOnly 子字段写入被拒,这正是 GE `Modifiers[0].ModifierMagnitude.ScalableFloatMagnitude.Value` 之类嵌套写入卡死的根因）。`list_u_properties` 返回完整反射(private/protected/裸 UPROPERTY + 解码后的 EPropertyFlags + metadata 全表)；`array_append_u_property` 自动识别 FGameplayTagContainer 维护 ParentTags 缓存；`get_asset_cdo_path` 正确解析 CDO 路径。写操作包 `FScopedTransaction` + 可选 `PostEditChangeChainProperty` 让编辑器实时刷新。 |
 
 ## 协议
 
