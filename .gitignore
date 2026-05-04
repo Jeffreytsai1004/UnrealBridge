@@ -1,3 +1,7 @@
+# Local junction created by link_agents_skills.bat — NOT committed
+# (NTFS junction → .claude/skills; each clone runs the script to materialize it)
+.agents/
+
 # Prerequisites
 *.d
 
