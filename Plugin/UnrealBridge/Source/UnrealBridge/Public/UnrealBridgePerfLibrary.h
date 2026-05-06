@@ -316,4 +316,37 @@ public:
 		const FString& GroupBy,
 		const FString& Mode = TEXT("disk"),
 		int32 MaxGroups = 50);
+
+	/**
+	 * Aggregate static + skeletal mesh assets by group with disk or runtime
+	 * byte totals.
+	 *
+	 * `GroupBy` ∈ {"folder", "lod_count", "vertex_count_bucket"}:
+	 *   - "folder" → Key = leading content path (one level deep)
+	 *   - "lod_count" → Key = number of LODs (e.g. "3 LODs")
+	 *   - "vertex_count_bucket" → Key = log-scale bucket
+	 *     ("<1k", "1k-10k", "10k-100k", "100k-1M", ">=1M")
+	 *
+	 * `MeshType` ∈ {"static", "skeletal", "all"} (default "all"):
+	 *   - "static" walks UStaticMesh only
+	 *   - "skeletal" walks USkeletalMesh only
+	 *   - "all" walks both, summed into a single bucket per Key
+	 *
+	 * `Mode` ∈ {"disk", "runtime"} (default "disk"):
+	 *   - "disk" reads AssetRegistry tags (LODs, Vertices) without LoadObject;
+	 *     bytes come from the package's on-disk file size.
+	 *   - "runtime" iterates loaded UStaticMesh / USkeletalMesh objects and
+	 *     calls GetResourceSizeBytes(EstimatedTotal); LOD/vertex counts come
+	 *     from RenderData. Misses unloaded meshes by design.
+	 *
+	 * `MaxGroups` clamped to [1, 1000]; rows sorted by TotalBytes descending,
+	 * ties broken by Count then Key. Never-saved assets (empty TagsAndValues
+	 * + missing on-disk file) are skipped in disk mode.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static TArray<FBridgePerfBreakdownRow> GetMeshMemoryBreakdown(
+		const FString& GroupBy,
+		const FString& MeshType = TEXT("all"),
+		const FString& Mode = TEXT("disk"),
+		int32 MaxGroups = 50);
 };

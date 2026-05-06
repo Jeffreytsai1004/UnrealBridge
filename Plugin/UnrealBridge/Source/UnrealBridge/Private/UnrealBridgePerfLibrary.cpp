@@ -26,6 +26,11 @@
 #include "GameFramework/Actor.h"
 #include "WorldPartition/WorldPartition.h"
 #include "Engine/Texture.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/SkeletalMesh.h"
+#include "StaticMeshResources.h"
+#include "Rendering/SkeletalMeshRenderData.h"
+#include "Rendering/SkeletalMeshLODRenderData.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "AssetRegistry/AssetData.h"
@@ -750,6 +755,259 @@ TArray<FBridgePerfBreakdownRow> UUnrealBridgePerfLibrary::GetTextureMemoryBreakd
 			const FString Key = BridgePerfImpl::GetTextureGroupKeyFromAssetData(Data, ModeEnum);
 			BridgePerfImpl::AccumulateBucket(Buckets, Key, Bytes, Data.GetSoftObjectPath().ToString());
 		}
+	}
+
+	Out.Reserve(Buckets.Num());
+	for (const TPair<FString, FBridgePerfBreakdownRow>& Pair : Buckets)
+	{
+		Out.Add(Pair.Value);
+	}
+	BridgePerfImpl::FinalizeBreakdownRowsByBytes(Out, MaxGroups);
+	return Out;
+}
+
+// ─── Mesh memory breakdown (M1-2) ───────────────────────────
+
+namespace BridgePerfImpl
+{
+	enum class EMeshGroupBy : uint8
+	{
+		Folder,
+		LodCount,
+		VertexCountBucket,
+	};
+
+	static bool ParseMeshGroupBy(const FString& In, EMeshGroupBy& Out)
+	{
+		if (In.Equals(TEXT("folder"), ESearchCase::IgnoreCase)) { Out = EMeshGroupBy::Folder; return true; }
+		if (In.Equals(TEXT("lod_count"), ESearchCase::IgnoreCase)) { Out = EMeshGroupBy::LodCount; return true; }
+		if (In.Equals(TEXT("vertex_count_bucket"), ESearchCase::IgnoreCase)) { Out = EMeshGroupBy::VertexCountBucket; return true; }
+		return false;
+	}
+
+	/** Map a vertex count to a coarse log-scale bucket. */
+	static FString VertexCountToBucket(int64 N)
+	{
+		if (N < 0) N = 0;
+		if (N < 1000)        return TEXT("<1k");
+		if (N < 10000)       return TEXT("1k-10k");
+		if (N < 100000)      return TEXT("10k-100k");
+		if (N < 1000000)     return TEXT("100k-1M");
+		return TEXT(">=1M");
+	}
+
+	/** Read a numeric tag from FAssetData; returns Default when missing. */
+	static int64 GetTagInt(const FAssetData& Data, FName Tag, int64 Default)
+	{
+		FString Value;
+		if (Data.GetTagValue(Tag, Value) && !Value.IsEmpty())
+		{
+			return FCString::Atoi64(*Value);
+		}
+		return Default;
+	}
+
+	static FString GetMeshGroupKeyFromAssetData(const FAssetData& Data, EMeshGroupBy Mode)
+	{
+		switch (Mode)
+		{
+		case EMeshGroupBy::Folder:
+			return GetTopLevelFolder(Data.PackagePath.ToString());
+		case EMeshGroupBy::LodCount:
+		{
+			const int64 N = GetTagInt(Data, TEXT("LODs"), -1);
+			if (N < 0) return TEXT("(unknown)");
+			return FString::Printf(TEXT("%d LOD%s"), static_cast<int32>(N), (N == 1 ? TEXT("") : TEXT("s")));
+		}
+		case EMeshGroupBy::VertexCountBucket:
+		{
+			const int64 N = GetTagInt(Data, TEXT("Vertices"), -1);
+			if (N < 0) return TEXT("(unknown)");
+			return VertexCountToBucket(N);
+		}
+		}
+		return TEXT("(unknown)");
+	}
+}
+
+TArray<FBridgePerfBreakdownRow> UUnrealBridgePerfLibrary::GetMeshMemoryBreakdown(
+	const FString& GroupBy,
+	const FString& MeshType,
+	const FString& Mode,
+	int32 MaxGroups)
+{
+	TArray<FBridgePerfBreakdownRow> Out;
+
+	BridgePerfImpl::EMeshGroupBy ModeEnum = BridgePerfImpl::EMeshGroupBy::Folder;
+	if (!BridgePerfImpl::ParseMeshGroupBy(GroupBy, ModeEnum))
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridgePerf: GetMeshMemoryBreakdown bad group_by '%s' — expected ")
+			TEXT("folder | lod_count | vertex_count_bucket"),
+			*GroupBy);
+		return Out;
+	}
+
+	const bool bWantStatic = MeshType.IsEmpty()
+		|| MeshType.Equals(TEXT("all"), ESearchCase::IgnoreCase)
+		|| MeshType.Equals(TEXT("static"), ESearchCase::IgnoreCase);
+	const bool bWantSkeletal = MeshType.IsEmpty()
+		|| MeshType.Equals(TEXT("all"), ESearchCase::IgnoreCase)
+		|| MeshType.Equals(TEXT("skeletal"), ESearchCase::IgnoreCase);
+	if (!bWantStatic && !bWantSkeletal)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridgePerf: GetMeshMemoryBreakdown bad mesh_type '%s' — expected static | skeletal | all"),
+			*MeshType);
+		return Out;
+	}
+
+	const bool bRuntimeMode = Mode.Equals(TEXT("runtime"), ESearchCase::IgnoreCase);
+	const bool bDiskMode = Mode.IsEmpty() || Mode.Equals(TEXT("disk"), ESearchCase::IgnoreCase);
+	if (!bRuntimeMode && !bDiskMode)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridgePerf: GetMeshMemoryBreakdown bad mode '%s' — expected disk | runtime"),
+			*Mode);
+		return Out;
+	}
+
+	TMap<FString, FBridgePerfBreakdownRow> Buckets;
+	Buckets.Reserve(64);
+
+	if (bRuntimeMode)
+	{
+		if (bWantStatic)
+		{
+			for (TObjectIterator<UStaticMesh> It; It; ++It)
+			{
+				UStaticMesh* SM = *It;
+				if (!SM || !IsValid(SM)) continue;
+				const int64 Bytes = static_cast<int64>(SM->GetResourceSizeBytes(EResourceSizeMode::EstimatedTotal));
+				FString Key;
+				switch (ModeEnum)
+				{
+				case BridgePerfImpl::EMeshGroupBy::Folder:
+				{
+					if (UPackage* Pkg = SM->GetOutermost())
+					{
+						const FString PackageName = Pkg->GetName();
+						int32 LastSlash = INDEX_NONE;
+						if (PackageName.FindLastChar(TEXT('/'), LastSlash))
+						{
+							Key = BridgePerfImpl::GetTopLevelFolder(PackageName.Left(LastSlash));
+						}
+						else
+						{
+							Key = PackageName;
+						}
+					}
+					else
+					{
+						Key = TEXT("(transient)");
+					}
+					break;
+				}
+				case BridgePerfImpl::EMeshGroupBy::LodCount:
+				{
+					const int32 NumLODs = SM->GetNumLODs();
+					Key = FString::Printf(TEXT("%d LOD%s"), NumLODs, (NumLODs == 1 ? TEXT("") : TEXT("s")));
+					break;
+				}
+				case BridgePerfImpl::EMeshGroupBy::VertexCountBucket:
+				{
+					int64 TotalVerts = 0;
+					if (FStaticMeshRenderData* RD = SM->GetRenderData())
+					{
+						for (const FStaticMeshLODResources& LOD : RD->LODResources)
+						{
+							TotalVerts += LOD.GetNumVertices();
+						}
+					}
+					Key = BridgePerfImpl::VertexCountToBucket(TotalVerts);
+					break;
+				}
+				}
+				BridgePerfImpl::AccumulateBucket(Buckets, Key, Bytes, SM->GetPathName());
+			}
+		}
+		if (bWantSkeletal)
+		{
+			for (TObjectIterator<USkeletalMesh> It; It; ++It)
+			{
+				USkeletalMesh* SK = *It;
+				if (!SK || !IsValid(SK)) continue;
+				const int64 Bytes = static_cast<int64>(SK->GetResourceSizeBytes(EResourceSizeMode::EstimatedTotal));
+				FString Key;
+				switch (ModeEnum)
+				{
+				case BridgePerfImpl::EMeshGroupBy::Folder:
+				{
+					if (UPackage* Pkg = SK->GetOutermost())
+					{
+						const FString PackageName = Pkg->GetName();
+						int32 LastSlash = INDEX_NONE;
+						if (PackageName.FindLastChar(TEXT('/'), LastSlash))
+						{
+							Key = BridgePerfImpl::GetTopLevelFolder(PackageName.Left(LastSlash));
+						}
+						else
+						{
+							Key = PackageName;
+						}
+					}
+					else
+					{
+						Key = TEXT("(transient)");
+					}
+					break;
+				}
+				case BridgePerfImpl::EMeshGroupBy::LodCount:
+				{
+					int32 NumLODs = 0;
+					if (FSkeletalMeshRenderData* RD = SK->GetResourceForRendering())
+					{
+						NumLODs = RD->LODRenderData.Num();
+					}
+					Key = FString::Printf(TEXT("%d LOD%s"), NumLODs, (NumLODs == 1 ? TEXT("") : TEXT("s")));
+					break;
+				}
+				case BridgePerfImpl::EMeshGroupBy::VertexCountBucket:
+				{
+					int64 TotalVerts = 0;
+					if (FSkeletalMeshRenderData* RD = SK->GetResourceForRendering())
+					{
+						for (const FSkeletalMeshLODRenderData& LOD : RD->LODRenderData)
+						{
+							TotalVerts += LOD.GetNumVertices();
+						}
+					}
+					Key = BridgePerfImpl::VertexCountToBucket(TotalVerts);
+					break;
+				}
+				}
+				BridgePerfImpl::AccumulateBucket(Buckets, Key, Bytes, SK->GetPathName());
+			}
+		}
+	}
+	else
+	{
+		IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+		auto WalkAssets = [&Buckets, ModeEnum, &AR](UClass* Cls)
+		{
+			TArray<FAssetData> Assets;
+			AR.GetAssetsByClass(Cls->GetClassPathName(), Assets, /*bSearchSubClasses=*/true);
+			for (const FAssetData& Data : Assets)
+			{
+				if (!Data.IsValid()) continue;
+				const int64 Bytes = BridgePerfImpl::GetPackageDiskSize(Data.PackageName);
+				if (Bytes <= 0) continue;
+				const FString Key = BridgePerfImpl::GetMeshGroupKeyFromAssetData(Data, ModeEnum);
+				BridgePerfImpl::AccumulateBucket(Buckets, Key, Bytes, Data.GetSoftObjectPath().ToString());
+			}
+		};
+		if (bWantStatic) WalkAssets(UStaticMesh::StaticClass());
+		if (bWantSkeletal) WalkAssets(USkeletalMesh::StaticClass());
 	}
 
 	Out.Reserve(Buckets.Num());
