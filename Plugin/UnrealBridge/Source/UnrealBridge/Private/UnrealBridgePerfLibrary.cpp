@@ -27,6 +27,11 @@
 #include "Misc/EngineVersion.h"
 #include "Misc/DateTime.h"
 #include "Misc/PackageName.h"
+#include "Engine/Engine.h"
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
+#include "ProfilingDebugging/TraceAuxiliary.h"
+#include "Trace/Trace.h"
+#endif
 #include "Engine/World.h"
 #include "Engine/Level.h"
 #include "EngineUtils.h"
@@ -2524,6 +2529,398 @@ TArray<FBridgeActorRenderCost> UUnrealBridgePerfLibrary::GetShadowCasterBreakdow
 	{
 		Out.SetNum(ClampedTopN);
 	}
+
+	return Out;
+}
+
+// ─── M4: UE Trace integration ──────────────────────────────
+
+namespace BridgePerfTrace
+{
+	/** Single global cs guarding the cached capture state below. The
+	 *  underlying FTraceAuxiliary calls are themselves thread-safe; this
+	 *  lock only protects our shadow copy of (path, channels, started_at,
+	 *  start_seconds) which we read back at stop time. */
+	static FCriticalSection State_Lock;
+
+	/** True between StartTraceCapture success and StopTraceCapture (or until
+	 *  GetTraceState reconciles with FTraceAuxiliary::IsConnected() == false). */
+	static bool bActive = false;
+
+	/** Absolute path the active or last capture wrote to. Survives a stop so
+	 *  GetTraceState can keep reporting "last run path". */
+	static FString ActivePath;
+
+	/** Channel set passed to Start (split list, sorted). */
+	static TArray<FString> ActiveChannels;
+
+	/** Configured cap (advisory only). Recorded for parity with the spec. */
+	static int32 ActiveMaxSizeMb = 0;
+
+	/** ISO-8601 UTC timestamp of the matching Start. */
+	static FString ActiveStartedAtUtc;
+
+	/** Wall clock seconds at start (FApp::GetCurrentTime). Used for Stop's
+	 *  duration_seconds. */
+	static double ActiveStartSeconds = 0.0;
+
+	/** Default channel set when caller passed an empty list. The 5.4+ trace
+	 *  API also accepts the literal "default" preset for this. */
+	static FString DefaultChannelString()
+	{
+		return TEXT("default");
+	}
+
+	/** Join channel names with commas, trimming each entry and dropping empties. */
+	static FString JoinChannels(const TArray<FString>& Channels)
+	{
+		TArray<FString> Cleaned;
+		Cleaned.Reserve(Channels.Num());
+		for (const FString& C : Channels)
+		{
+			const FString Trimmed = C.TrimStartAndEnd();
+			if (!Trimmed.IsEmpty())
+			{
+				Cleaned.Add(Trimmed);
+			}
+		}
+		return FString::Join(Cleaned, TEXT(","));
+	}
+
+	/** Resolve OutputDir to a final absolute file path. Handles three shapes:
+	 *  empty → default Saved/UnrealBridge/Traces/<unix>.utrace; existing or
+	 *  obvious-directory string → Dir + auto-named file; anything else → use
+	 *  as-is. Caller's responsibility to ensure parent dir is creatable. */
+	static FString ResolveTraceFilePath(const FString& OutputDir)
+	{
+		const FString DefaultDir = FPaths::Combine(
+			FPaths::ProjectSavedDir(),
+			TEXT("UnrealBridge"),
+			TEXT("Traces"));
+		const int64 Unix = FDateTime::UtcNow().ToUnixTimestamp();
+		const FString AutoName = FString::Printf(TEXT("%lld.utrace"), Unix);
+
+		if (OutputDir.IsEmpty())
+		{
+			return FPaths::Combine(DefaultDir, AutoName);
+		}
+
+		// "Obvious directory": existing dir on disk OR a path that ends in a
+		// path separator OR has no extension. The third heuristic catches new
+		// directories the caller wants us to create. We never silently
+		// overwrite a caller-supplied filename — preserve as-is.
+		const FString Trimmed = OutputDir.TrimStartAndEnd();
+		const bool bExistsAsDir = IFileManager::Get().DirectoryExists(*Trimmed);
+		const bool bEndsInSep = Trimmed.EndsWith(TEXT("/")) || Trimmed.EndsWith(TEXT("\\"));
+		const bool bNoExt = FPaths::GetExtension(Trimmed).IsEmpty();
+		if (bExistsAsDir || bEndsInSep || bNoExt)
+		{
+			return FPaths::Combine(Trimmed, AutoName);
+		}
+		return Trimmed;
+	}
+
+	/** Ensure the parent directory of `FilePath` exists (creating it if not). */
+	static bool EnsureParentDir(const FString& FilePath)
+	{
+		const FString ParentDir = FPaths::GetPath(FilePath);
+		if (ParentDir.IsEmpty())
+		{
+			return true;
+		}
+		IFileManager& FM = IFileManager::Get();
+		if (FM.DirectoryExists(*ParentDir))
+		{
+			return true;
+		}
+		return FM.MakeDirectory(*ParentDir, /*Tree=*/true);
+	}
+
+	/** Stat the trace file size; 0 if absent (just-flushed or never created). */
+	static int64 QueryFileSize(const FString& FilePath)
+	{
+		if (FilePath.IsEmpty())
+		{
+			return 0;
+		}
+		const int64 Size = IFileManager::Get().FileSize(*FilePath);
+		return Size > 0 ? Size : 0;
+	}
+
+	/** Reset the cached state to "never started". */
+	static void ResetState_NoLock()
+	{
+		bActive = false;
+		ActivePath.Reset();
+		ActiveChannels.Reset();
+		ActiveMaxSizeMb = 0;
+		ActiveStartedAtUtc.Reset();
+		ActiveStartSeconds = 0.0;
+	}
+}
+
+FBridgeTraceStartResult UUnrealBridgePerfLibrary::StartTraceCapture(
+	const TArray<FString>& Channels,
+	const FString& OutputDir,
+	int32 MaxSizeMb)
+{
+	FBridgeTraceStartResult Out;
+	const int32 ClampedMaxMb = FMath::Clamp(MaxSizeMb, 0, 65536);
+
+	{
+		FScopeLock L(&BridgePerfTrace::State_Lock);
+		if (BridgePerfTrace::bActive)
+		{
+			Out.bSuccess = false;
+			Out.Error = TEXT("already_active");
+			Out.Path = BridgePerfTrace::ActivePath;
+			Out.Channels = BridgePerfTrace::ActiveChannels;
+			return Out;
+		}
+	}
+
+	const FString FilePath = BridgePerfTrace::ResolveTraceFilePath(OutputDir);
+	if (!BridgePerfTrace::EnsureParentDir(FilePath))
+	{
+		Out.bSuccess = false;
+		Out.Error = FString::Printf(TEXT("could_not_create_parent_dir: %s"),
+			*FPaths::GetPath(FilePath));
+		return Out;
+	}
+
+	// Build the channel list: empty caller list ⇒ engine "default" preset.
+	// Otherwise comma-join trimmed entries. Engine accepts either a CSV list
+	// of channel names or a registered preset name in the same string.
+	FString ChannelStr = BridgePerfTrace::JoinChannels(Channels);
+	if (ChannelStr.IsEmpty())
+	{
+		ChannelStr = BridgePerfTrace::DefaultChannelString();
+	}
+
+	bool bStarted = false;
+	FString ErrorMsg;
+
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
+	// 5.4+ public API. FTraceAuxiliary::Start() returns false if a connection
+	// is already active, the target couldn't be opened, or trace was disabled
+	// at compile time. We don't expose Options yet — defaults match the
+	// engine's own "Trace.Start" console command behavior.
+	bStarted = FTraceAuxiliary::Start(
+		FTraceAuxiliary::EConnectionType::File,
+		*FilePath,
+		*ChannelStr,
+		/*Options=*/nullptr);
+	if (!bStarted)
+	{
+		ErrorMsg = TEXT("FTraceAuxiliary::Start returned false (already connected, file open failed, or trace disabled at compile time)");
+	}
+#else
+	// 5.3 fallback: drive the trace system through the console. The Trace
+	// system parses File="..." and Channels=... from the cmd line. We pass
+	// World=nullptr because trace is editor-process global, not world-scoped.
+	if (GEngine)
+	{
+		const FString Cmd = FString::Printf(
+			TEXT("Trace.Start File=\"%s\" Channels=%s"),
+			*FilePath,
+			*ChannelStr);
+		bStarted = GEngine->Exec(/*World=*/nullptr, *Cmd);
+		if (!bStarted)
+		{
+			ErrorMsg = TEXT("GEngine->Exec(Trace.Start) returned false");
+		}
+	}
+	else
+	{
+		ErrorMsg = TEXT("GEngine null; cannot run Trace.Start");
+	}
+#endif
+
+	if (!bStarted)
+	{
+		Out.bSuccess = false;
+		Out.Error = ErrorMsg.IsEmpty() ? TEXT("trace_start_failed") : ErrorMsg;
+		return Out;
+	}
+
+	// Persist shadow state so Stop / GetState can read it back.
+	{
+		FScopeLock L(&BridgePerfTrace::State_Lock);
+		BridgePerfTrace::bActive = true;
+		BridgePerfTrace::ActivePath = FilePath;
+		BridgePerfTrace::ActiveMaxSizeMb = ClampedMaxMb;
+		BridgePerfTrace::ActiveStartedAtUtc = FDateTime::UtcNow().ToIso8601();
+		BridgePerfTrace::ActiveStartSeconds = FApp::GetCurrentTime();
+
+		// Split the joined string back into entries for the result struct.
+		// Use the original list when present, otherwise echo "default".
+		BridgePerfTrace::ActiveChannels.Reset();
+		if (Channels.Num() > 0)
+		{
+			for (const FString& C : Channels)
+			{
+				const FString T = C.TrimStartAndEnd();
+				if (!T.IsEmpty())
+				{
+					BridgePerfTrace::ActiveChannels.Add(T);
+				}
+			}
+		}
+		if (BridgePerfTrace::ActiveChannels.Num() == 0)
+		{
+			BridgePerfTrace::ActiveChannels.Add(BridgePerfTrace::DefaultChannelString());
+		}
+
+		Out.Path = BridgePerfTrace::ActivePath;
+		Out.Channels = BridgePerfTrace::ActiveChannels;
+	}
+	Out.bSuccess = true;
+	Out.Error.Reset();
+	return Out;
+}
+
+FBridgeTraceStopResult UUnrealBridgePerfLibrary::StopTraceCapture()
+{
+	FBridgeTraceStopResult Out;
+
+	FString PathSnapshot;
+	double StartSecondsSnapshot = 0.0;
+	bool bWasActive = false;
+	{
+		FScopeLock L(&BridgePerfTrace::State_Lock);
+		bWasActive = BridgePerfTrace::bActive;
+		PathSnapshot = BridgePerfTrace::ActivePath;
+		StartSecondsSnapshot = BridgePerfTrace::ActiveStartSeconds;
+	}
+
+	bool bStopped = false;
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
+	bStopped = FTraceAuxiliary::Stop();
+#else
+	if (GEngine)
+	{
+		bStopped = GEngine->Exec(/*World=*/nullptr, TEXT("Trace.Stop"));
+	}
+#endif
+
+	// Capture final size before resetting state — small race window between
+	// the API's stop and the OS flush, but good enough for diagnostics.
+	const int64 SizeBytes = BridgePerfTrace::QueryFileSize(PathSnapshot);
+	const double NowSeconds = FApp::GetCurrentTime();
+	const double Duration = (StartSecondsSnapshot > 0.0)
+		? FMath::Max(0.0, NowSeconds - StartSecondsSnapshot)
+		: 0.0;
+
+	{
+		FScopeLock L(&BridgePerfTrace::State_Lock);
+		// Only flip bActive off if we were the ones who started it; leave the
+		// path / channels populated so GetTraceState can still report the
+		// last run.
+		BridgePerfTrace::bActive = false;
+		BridgePerfTrace::ActiveStartSeconds = 0.0;
+	}
+
+	Out.bSuccess = bStopped && bWasActive;
+	Out.Path = PathSnapshot;
+	Out.SizeBytes = SizeBytes;
+	Out.DurationSeconds = static_cast<float>(Duration);
+	return Out;
+}
+
+FBridgeTraceState UUnrealBridgePerfLibrary::GetTraceState()
+{
+	FBridgeTraceState Out;
+	{
+		FScopeLock L(&BridgePerfTrace::State_Lock);
+		Out.bActive = BridgePerfTrace::bActive;
+		Out.Path = BridgePerfTrace::ActivePath;
+		Out.Channels = BridgePerfTrace::ActiveChannels;
+		Out.StartedAtUtc = BridgePerfTrace::ActiveStartedAtUtc;
+	}
+
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
+	// Reconcile with the engine's own view: if our shadow says active but
+	// the engine reports disconnected (e.g. user ran Trace.Stop in the
+	// console), flip our flag without losing the path. If the engine reports
+	// connected and our shadow is empty, we don't try to fabricate a path —
+	// leave bActive=false so callers know we didn't start this one.
+	const bool bEngineConnected = FTraceAuxiliary::IsConnected();
+	if (Out.bActive && !bEngineConnected)
+	{
+		Out.bActive = false;
+		FScopeLock L(&BridgePerfTrace::State_Lock);
+		BridgePerfTrace::bActive = false;
+	}
+	else if (!Out.bActive && bEngineConnected)
+	{
+		// External capture: reflect the destination but keep our channels
+		// empty (we don't know what they passed).
+		const FString Dest = FTraceAuxiliary::GetTraceDestinationString();
+		if (!Dest.IsEmpty())
+		{
+			Out.bActive = true;
+			Out.Path = Dest;
+		}
+	}
+#endif
+
+	Out.CurrentSizeBytes = BridgePerfTrace::QueryFileSize(Out.Path);
+	return Out;
+}
+
+namespace BridgePerfTrace
+{
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
+	/** EnumerateChannels callback — uses the simpler ChannelIterFunc shape
+	 *  that's been stable since the API was introduced. We strip the
+	 *  trailing "Channel" suffix the trace system internally appends to
+	 *  every channel C++ identifier (matches what other engine code does
+	 *  for user-facing display). */
+	static void EnumerateChannelCallback(const ANSICHAR* Name, bool bEnabled, void* User)
+	{
+		auto* Sink = static_cast<TArray<FBridgeTraceChannelInfo>*>(User);
+		if (!Sink || !Name)
+		{
+			return;
+		}
+		FBridgeTraceChannelInfo Row;
+		FString DisplayName(ANSI_TO_TCHAR(Name));
+		// "FooChannel" → "Foo". Engine convention; matches FTraceAuxiliaryImpl.
+		const FString Suffix = TEXT("Channel");
+		if (DisplayName.EndsWith(Suffix))
+		{
+			DisplayName.LeftChopInline(Suffix.Len());
+		}
+		// Lowercase for canonical form: trace channels are documented in
+		// lowercase ("cpu", "frame", "rdg") even though the C++ symbols
+		// have varied case ("CpuChannel" / "FrameChannel" / etc.).
+		Row.Name = DisplayName.ToLower();
+		Row.bEnabled = bEnabled;
+		Row.Description.Reset(); // Simpler API doesn't expose description.
+		Sink->Add(MoveTemp(Row));
+	}
+#endif
+}
+
+TArray<FBridgeTraceChannelInfo> UUnrealBridgePerfLibrary::ListTraceChannels()
+{
+	TArray<FBridgeTraceChannelInfo> Out;
+
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
+	UE::Trace::EnumerateChannels(&BridgePerfTrace::EnumerateChannelCallback, &Out);
+
+	// Stable alpha-sorted order. Two channels with the same display name
+	// (rare but possible if engine modules register duplicates) collapse
+	// into the order EnumerateChannels surfaced them — we don't dedupe.
+	Out.Sort([](const FBridgeTraceChannelInfo& A, const FBridgeTraceChannelInfo& B)
+	{
+		return A.Name < B.Name;
+	});
+#else
+	// 5.3 has neither UE::Trace::EnumerateChannels nor a documented public
+	// equivalent. Returning an empty array is honest; callers can still use
+	// StartTraceCapture with their own channel name list.
+#endif
 
 	return Out;
 }

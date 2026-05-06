@@ -60,6 +60,13 @@ public class UnrealBridge : ModuleRules
 			"Chooser",
 			"ChooserEditor",
 			"StructUtils",
+			// TraceLog hosts UE::Trace::EnumerateChannels (used by M4-4
+			// list_trace_channels). Core publicly forwards TraceLog headers
+			// but the symbols are __declspec(dllimport) so a direct link
+			// dep is required. TraceLog.Build.cs sets
+			// bRequiresImplementModule=false, so this only pulls the link
+			// import — no extra runtime cost.
+			"TraceLog",
 		});
 
 		// Live Coding is a Windows-only editor module. Guard the dep so

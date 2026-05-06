@@ -477,6 +477,119 @@ struct FBridgeNaniteStats
 };
 
 /**
+ * Result of `StartTraceCapture` (M4-1). When `bSuccess` is true, `Path` is
+ * the absolute file path the trace is being written to and `Channels` is the
+ * channel set the engine reports as active. On failure, `Error` describes the
+ * cause (already-active capture, FTraceAuxiliary::Start returned false, etc.)
+ * and `Path` / `Channels` are empty.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeTraceStartResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bSuccess = false;
+
+	/** Absolute path of the .utrace file being written (empty on failure). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString Path;
+
+	/** Comma-separated channel list passed to the trace API, split into entries. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	TArray<FString> Channels;
+
+	/** Diagnostic message; empty on success. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString Error;
+};
+
+/**
+ * Result of `StopTraceCapture` (M4-2). `Path` is the file we *started* writing
+ * to (the engine API doesn't always echo the actual write target back); the
+ * caller can stat that path to confirm size > 0. `DurationSeconds` is wall
+ * clock time between the matching start/stop pair. `SizeBytes` is the file
+ * size the OS reports at stop time — 0 if the trace file isn't on disk yet
+ * (file system flush delay) or never started.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeTraceStopResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bSuccess = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString Path;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 SizeBytes = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float DurationSeconds = 0.f;
+};
+
+/**
+ * Snapshot of the trace capture state (M4-3). Returned by `GetTraceState`.
+ * When `bActive` is false the other fields describe the most recent run (or
+ * are zeroed if no run ever happened). `CurrentSizeBytes` queries the file
+ * system at call time — it is monotonic during a live capture.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeTraceState
+{
+	GENERATED_BODY()
+
+	/** True between StartTraceCapture and StopTraceCapture (or until the
+	 *  engine's FTraceAuxiliary reports the capture is no longer connected). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bActive = false;
+
+	/** Absolute path the active (or last) capture is writing to. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString Path;
+
+	/** Live file size of the active trace file at query time, in bytes.
+	 *  0 when not active or file not yet flushed. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 CurrentSizeBytes = 0;
+
+	/** Channel set the active (or last) capture was started with. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	TArray<FString> Channels;
+
+	/** ISO-8601 UTC timestamp of the matching StartTraceCapture (empty if
+	 *  no run has been started yet). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString StartedAtUtc;
+};
+
+/**
+ * One row from the trace channel registry (M4-4). Returned by
+ * `ListTraceChannels`. `Description` is populated only when the engine's
+ * EnumerateChannels overload exposes it; on the older callback shape the
+ * field stays empty.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeTraceChannelInfo
+{
+	GENERATED_BODY()
+
+	/** Channel name (e.g. "cpu", "gpu", "frame", "rdg"). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString Name;
+
+	/** True when the channel is currently emitting events. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bEnabled = false;
+
+	/** Engine-supplied description; may be empty on older versions. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString Description;
+};
+
+/**
  * Structured performance snapshots for UnrealBridge. Replaces parsing
  * `stat unit` text output. All values are read from engine globals + platform
  * APIs on the GameThread.
@@ -887,4 +1000,80 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
 	static FBridgeNaniteStats GetNaniteStats();
+
+	// ─── M4: UE Trace integration ──────────────────────────────
+
+	/**
+	 * Begin a UE Trace file capture (M4-1). Channels is a list of channel
+	 * names (e.g. {"cpu","gpu","frame","rdg","loadtime","memalloc",
+	 * "gameplay","slate"}); the engine accepts any registered channel name
+	 * — call `ListTraceChannels` to enumerate. Empty list falls back to the
+	 * engine's "default" preset.
+	 *
+	 * `OutputDir` resolution:
+	 *   - empty → <Project>/Saved/UnrealBridge/Traces/<unix_ts>.utrace
+	 *   - directory → that directory + the auto-named file
+	 *   - any other path treated as the output file (parent dir created)
+	 *
+	 * `MaxSizeMb` is advisory; the engine API doesn't directly enforce a
+	 * cap — we record it in state for the caller's bookkeeping (and so a
+	 * future watchdog can stop the capture). 0 = unlimited; clamped to
+	 * [0, 65536].
+	 *
+	 * On 5.4+: forwards to `FTraceAuxiliary::Start(EConnectionType::File, ...)`.
+	 * On 5.3: falls back to `GEngine->Exec(TEXT("Trace.Start File=..."))`.
+	 *
+	 * Returns `bSuccess=false, Error="already_active"` when a capture is
+	 * already in progress (call `StopTraceCapture` first).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static FBridgeTraceStartResult StartTraceCapture(
+		const TArray<FString>& Channels,
+		const FString& OutputDir,
+		int32 MaxSizeMb = 500);
+
+	/**
+	 * Stop the active UE Trace capture (M4-2). Returns the path that was
+	 * being written, the OS-reported file size at stop time, and the wall
+	 * clock duration since the matching `StartTraceCapture`. Safe to call
+	 * when no capture is active — returns `bSuccess=false` with empty
+	 * fields. The internal capture state is reset on success so the next
+	 * `StartTraceCapture` can begin cleanly.
+	 *
+	 * On 5.4+: forwards to `FTraceAuxiliary::Stop()`.
+	 * On 5.3: runs `GEngine->Exec(TEXT("Trace.Stop"))`.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static FBridgeTraceStopResult StopTraceCapture();
+
+	/**
+	 * Query the trace capture state (M4-3). On 5.4+ also reconciles the
+	 * cached state with `FTraceAuxiliary::IsConnected()`/destination string,
+	 * so external `Trace.Start` console commands are reflected. The
+	 * `Channels` and `StartedAtUtc` fields reflect only captures started
+	 * via this library — engine-initiated captures populate `bActive` and
+	 * `Path` but leave the others empty.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static FBridgeTraceState GetTraceState();
+
+	/**
+	 * Enumerate every trace channel the engine knows about (M4-4). Each
+	 * entry has the channel `Name`, current `bEnabled` state, and a
+	 * possibly-empty `Description`. Channel names follow the convention
+	 * "<base>" (e.g. "cpu", "frame"); the engine's internal "Channel"
+	 * suffix is stripped.
+	 *
+	 * On 5.4+: reads via `UE::Trace::EnumerateChannels`. On 5.3: returns
+	 * an empty array (the public enumeration API isn't there yet).
+	 *
+	 * Result is sorted alphabetically by Name.
+	 *
+	 * NOTE: parse_trace_to_summary (M4-5) is intentionally deferred —
+	 * decoding a `.utrace` file requires either linking the `TraceServices`
+	 * module or shelling out to UnrealInsights.exe (the latter is unstable
+	 * before 5.7). Tracked in docs/plans/perf-capability-roadmap.md.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static TArray<FBridgeTraceChannelInfo> ListTraceChannels();
 };
