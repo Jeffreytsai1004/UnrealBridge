@@ -247,6 +247,41 @@ struct FBridgeHitchEntry
 	float TotalMs = 0.f;
 };
 
+/**
+ * Status of the opt-in periodic perf sampler. Returned by
+ * GetPerfSamplingState. When `bActive` is false the other fields describe the
+ * most recently completed run (cleared on next StartPerfSampling).
+ */
+USTRUCT(BlueprintType)
+struct FBridgePerfSamplingState
+{
+	GENERATED_BODY()
+
+	/** True between StartPerfSampling and StopPerfSampling. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bActive = false;
+
+	/** ISO-8601 UTC timestamp of the last StartPerfSampling call (empty if never started). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString StartedAtUtc;
+
+	/** Currently buffered sample count (resets on each StartPerfSampling). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 SamplesCollected = 0;
+
+	/** Sampler period in milliseconds (as configured at the last StartPerfSampling). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 PeriodMs = 0;
+
+	/** Configured ring buffer cap for the active run. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 MaxSamples = 0;
+
+	/** True when the ticker is also recording UObject stats per sample. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bIncludeUObjectStats = false;
+};
+
 /** Bundled perf snapshot returned by GetPerfSnapshot. */
 USTRUCT(BlueprintType)
 struct FBridgePerfSnapshot
@@ -519,4 +554,59 @@ public:
 	/** Drop every captured hitch entry. */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
 	static void ClearHitchLog();
+
+	/**
+	 * Begin (or restart) periodic perf sampling. A FTSTicker on the GameThread
+	 * fires every `PeriodMs` and captures a `FBridgePerfSnapshot` into a
+	 * ring buffer of size `MaxSamples`. When `bIncludeUObjectStats` is true,
+	 * the UObject-iteration step (50-300 ms typical) runs every tick — only
+	 * enable it when paired with periods >= 5000 ms.
+	 *
+	 * Idempotent: calling while already active discards the prior run's
+	 * buffer and restarts with the new parameters.
+	 *
+	 * `PeriodMs` clamped to [10, 60000]; `MaxSamples` clamped to [1, 10000].
+	 * Returns true on success, false only if the FTSTicker registration fails
+	 * (extremely unusual — would mean the engine's core ticker is unavailable).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static bool StartPerfSampling(
+		int32 PeriodMs = 100,
+		int32 MaxSamples = 600,
+		bool bIncludeUObjectStats = false);
+
+	/**
+	 * Stop sampling and return the buffered snapshots (empty when nothing was
+	 * captured or sampling was never started). The internal buffer is
+	 * cleared after this call. Calling while inactive is safe and returns
+	 * whatever was previously buffered (typically empty after the prior
+	 * StopPerfSampling already drained it).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static TArray<FBridgePerfSnapshot> StopPerfSampling();
+
+	/** Return the active / inactive state of the periodic sampler. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static FBridgePerfSamplingState GetPerfSamplingState();
+
+	/**
+	 * Serialize the current periodic-sampling buffer to CSV. The header is:
+	 *   timestamp_utc, frame_number, fps, frame_ms, gt_ms, rt_ms, gpu_ms,
+	 *   rhi_ms, delta_seconds, used_physical_mb, used_virtual_mb,
+	 *   available_physical_mb, draw_calls, primitives_drawn, was_in_pie,
+	 *   engine_version
+	 *
+	 * UObject top-class stats are intentionally omitted (would balloon the row
+	 * width). One row per sample. Works whether sampling is active or stopped:
+	 * the buffer is read in-place without clearing.
+	 *
+	 * `OutputPath` resolution:
+	 *   - empty → <Project>/Saved/UnrealBridge/perf_samples_<unix>.csv
+	 *   - directory → that directory + the auto-named file
+	 *   - any other path → used as-is (parent dir created on demand)
+	 *
+	 * Returns true on successful write, false on I/O error or empty buffer.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static bool ExportPerfSamplesToCsv(const FString& OutputPath);
 };

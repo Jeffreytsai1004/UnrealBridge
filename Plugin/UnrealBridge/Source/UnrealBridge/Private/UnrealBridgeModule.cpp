@@ -33,6 +33,14 @@ namespace BridgePerfFrameHook
 	void Unregister();
 }
 
+// Opt-in periodic perf sampler — defined in UnrealBridgePerfLibrary.cpp.
+// No Start at module init (caller-driven) but Shutdown must release the
+// FTSTicker handle if a sampling run is still active when the module exits.
+namespace BridgePerfSampler
+{
+	void Shutdown();
+}
+
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealBridgeModule, Log, All);
 
 namespace
@@ -265,6 +273,7 @@ void FUnrealBridgeModule::StartupModule()
 
 void FUnrealBridgeModule::ShutdownModule()
 {
+	BridgePerfSampler::Shutdown();
 	BridgePerfFrameHook::Unregister();
 	BridgeDebugState::Unregister();
 

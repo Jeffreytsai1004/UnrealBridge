@@ -12,10 +12,13 @@
 #include "RHIStats.h"
 #include "RHIGlobals.h"
 #include "DynamicRHI.h"
+#include "Containers/Ticker.h"
 #include "HAL/CriticalSection.h"
 #include "HAL/PlatformTime.h"
 #include "HAL/PlatformMemory.h"
 #include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/Package.h"
 #include "Misc/App.h"
@@ -1615,4 +1618,293 @@ void UUnrealBridgePerfLibrary::ResetFrameTimeHistogram()
 void UUnrealBridgePerfLibrary::ClearHitchLog()
 {
 	BridgePerfFrameHook::ClearHitches();
+}
+
+// ─── M2-1..3: opt-in periodic perf sampling ─────────────────
+
+namespace BridgePerfSampler
+{
+	/**
+	 * Module-lifetime singleton holding the FTSTicker handle, configured params,
+	 * and the captured FBridgePerfSnapshot ring buffer. Access is funneled
+	 * through `Sampler_Lock` because the ticker fires on GT but UFUNCTION
+	 * callers can in theory touch state on different threads in tests; both
+	 * sides are cheap so a scoped lock is the simplest correct answer.
+	 */
+	static FCriticalSection Sampler_Lock;
+
+	static FTSTicker::FDelegateHandle TickerHandle;
+	static bool bActive = false;
+	static FString StartedAtUtc;
+	static int32 PeriodMsConfigured = 0;
+	static int32 MaxSamplesConfigured = 0;
+	static bool bIncludeUObjectStatsConfigured = false;
+
+	static TArray<FBridgePerfSnapshot> Buffer;
+
+	/** Append one snapshot, evicting the oldest when the ring fills. */
+	static void AppendSnapshot(FBridgePerfSnapshot&& Snap)
+	{
+		FScopeLock L(&Sampler_Lock);
+		Buffer.Add(MoveTemp(Snap));
+		while (Buffer.Num() > MaxSamplesConfigured && MaxSamplesConfigured > 0)
+		{
+			Buffer.RemoveAt(0, /*Count*/ 1, /*EAllowShrinking*/ EAllowShrinking::No);
+		}
+	}
+
+	/** Ticker fn — must return true to keep ticking. */
+	static bool Tick(float /*DeltaTime*/)
+	{
+		// GetPerfSnapshot is cheap when bIncludeUObjectStats=false; with
+		// uobject stats enabled the call costs 50-300 ms, which we accept
+		// because the caller deliberately turned it on with a long period.
+		const bool bWantUObjects = bIncludeUObjectStatsConfigured;
+		FBridgePerfSnapshot Snap = UUnrealBridgePerfLibrary::GetPerfSnapshot(bWantUObjects, /*UObjectTopN*/ 20);
+		AppendSnapshot(MoveTemp(Snap));
+		return true; // keep ticking
+	}
+
+	/** Tear down the active ticker registration if any. Returns whatever was
+	 *  buffered; the buffer is cleared as part of the swap. */
+	static TArray<FBridgePerfSnapshot> StopAndDrain()
+	{
+		TArray<FBridgePerfSnapshot> Out;
+		{
+			FScopeLock L(&Sampler_Lock);
+			if (TickerHandle.IsValid())
+			{
+				FTSTicker::GetCoreTicker().RemoveTicker(TickerHandle);
+				TickerHandle.Reset();
+			}
+			bActive = false;
+			Out = MoveTemp(Buffer);
+			Buffer.Reset();
+		}
+		return Out;
+	}
+
+	/** Module shutdown hook — release without returning data. */
+	void Shutdown()
+	{
+		FScopeLock L(&Sampler_Lock);
+		if (TickerHandle.IsValid())
+		{
+			FTSTicker::GetCoreTicker().RemoveTicker(TickerHandle);
+			TickerHandle.Reset();
+		}
+		bActive = false;
+		Buffer.Reset();
+		StartedAtUtc.Reset();
+		PeriodMsConfigured = 0;
+		MaxSamplesConfigured = 0;
+		bIncludeUObjectStatsConfigured = false;
+	}
+
+	bool Start(int32 PeriodMs, int32 MaxSamples, bool bIncludeUObjectStats)
+	{
+		FScopeLock L(&Sampler_Lock);
+
+		// Idempotent restart: cancel any prior run first.
+		if (TickerHandle.IsValid())
+		{
+			FTSTicker::GetCoreTicker().RemoveTicker(TickerHandle);
+			TickerHandle.Reset();
+		}
+		Buffer.Reset();
+
+		PeriodMsConfigured = PeriodMs;
+		MaxSamplesConfigured = MaxSamples;
+		bIncludeUObjectStatsConfigured = bIncludeUObjectStats;
+		StartedAtUtc = FDateTime::UtcNow().ToIso8601();
+
+		const float Period = static_cast<float>(PeriodMs) / 1000.f;
+		TickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+			FTickerDelegate::CreateStatic(&Tick), Period);
+
+		bActive = TickerHandle.IsValid();
+		return bActive;
+	}
+
+	FBridgePerfSamplingState GetState()
+	{
+		FBridgePerfSamplingState Out;
+		FScopeLock L(&Sampler_Lock);
+		Out.bActive = bActive;
+		Out.StartedAtUtc = StartedAtUtc;
+		Out.SamplesCollected = Buffer.Num();
+		Out.PeriodMs = PeriodMsConfigured;
+		Out.MaxSamples = MaxSamplesConfigured;
+		Out.bIncludeUObjectStats = bIncludeUObjectStatsConfigured;
+		return Out;
+	}
+
+	/** Snapshot the buffer without clearing it (used by CSV export). */
+	TArray<FBridgePerfSnapshot> SnapshotBuffer()
+	{
+		FScopeLock L(&Sampler_Lock);
+		return Buffer;
+	}
+}
+
+bool UUnrealBridgePerfLibrary::StartPerfSampling(
+	int32 PeriodMs,
+	int32 MaxSamples,
+	bool bIncludeUObjectStats)
+{
+	const int32 ClampedPeriod = FMath::Clamp(PeriodMs, 10, 60000);
+	const int32 ClampedMax = FMath::Clamp(MaxSamples, 1, 10000);
+	if (bIncludeUObjectStats && ClampedPeriod < 5000)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridgePerf: StartPerfSampling include_uobject_stats=true with period_ms=%d ")
+			TEXT("(<5000) will cause every tick to spend 50-300 ms in TObjectIterator — proceeding ")
+			TEXT("but this is expensive."), ClampedPeriod);
+	}
+	return BridgePerfSampler::Start(ClampedPeriod, ClampedMax, bIncludeUObjectStats);
+}
+
+TArray<FBridgePerfSnapshot> UUnrealBridgePerfLibrary::StopPerfSampling()
+{
+	return BridgePerfSampler::StopAndDrain();
+}
+
+FBridgePerfSamplingState UUnrealBridgePerfLibrary::GetPerfSamplingState()
+{
+	return BridgePerfSampler::GetState();
+}
+
+// ─── M2-7: CSV export ───────────────────────────────────────
+
+namespace BridgePerfImpl
+{
+	/** Escape one field for CSV (RFC 4180): wrap in quotes when it contains
+	 *  comma, quote, CR, or LF; double up internal quotes. */
+	static FString CsvEscape(const FString& In)
+	{
+		const bool bNeedsQuote =
+			In.Contains(TEXT(",")) ||
+			In.Contains(TEXT("\"")) ||
+			In.Contains(TEXT("\n")) ||
+			In.Contains(TEXT("\r"));
+		if (!bNeedsQuote)
+		{
+			return In;
+		}
+		FString Escaped = In;
+		Escaped.ReplaceInline(TEXT("\""), TEXT("\"\""));
+		return TEXT("\"") + Escaped + TEXT("\"");
+	}
+
+	/** Resolve the caller-provided OutputPath to a concrete file path:
+	 *   - empty → <Project>/Saved/UnrealBridge/perf_samples_<unix>.csv
+	 *   - directory → that dir + auto-named file
+	 *   - anything else → use as-is.
+	 *  Also ensures the parent directory exists (creates if missing). */
+	static FString ResolveCsvOutputPath(const FString& OutputPath)
+	{
+		FString Resolved = OutputPath.TrimStartAndEnd();
+		const int64 UnixNow = FDateTime::UtcNow().ToUnixTimestamp();
+
+		if (Resolved.IsEmpty())
+		{
+			Resolved = FPaths::Combine(FPaths::ProjectSavedDir(),
+				TEXT("UnrealBridge"),
+				FString::Printf(TEXT("perf_samples_%lld.csv"), static_cast<long long>(UnixNow)));
+		}
+		else
+		{
+			// Treat path as a directory if either the trailing char is a slash
+			// or the path actually exists as a directory on disk.
+			const bool bEndsWithSlash =
+				Resolved.EndsWith(TEXT("/")) || Resolved.EndsWith(TEXT("\\"));
+			const bool bIsDir = bEndsWithSlash || IFileManager::Get().DirectoryExists(*Resolved);
+			if (bIsDir)
+			{
+				Resolved = FPaths::Combine(Resolved,
+					FString::Printf(TEXT("perf_samples_%lld.csv"), static_cast<long long>(UnixNow)));
+			}
+		}
+
+		// Ensure parent dir exists.
+		const FString ParentDir = FPaths::GetPath(Resolved);
+		if (!ParentDir.IsEmpty() && !IFileManager::Get().DirectoryExists(*ParentDir))
+		{
+			IFileManager::Get().MakeDirectory(*ParentDir, /*Tree*/ true);
+		}
+		return Resolved;
+	}
+}
+
+bool UUnrealBridgePerfLibrary::ExportPerfSamplesToCsv(const FString& OutputPath)
+{
+	TArray<FBridgePerfSnapshot> Samples = BridgePerfSampler::SnapshotBuffer();
+	if (Samples.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridgePerf: ExportPerfSamplesToCsv — sample buffer empty, nothing to write."));
+		return false;
+	}
+
+	const FString ResolvedPath = BridgePerfImpl::ResolveCsvOutputPath(OutputPath);
+
+	// Build the CSV string: a single FString::Reserve + Append loop. Each row
+	// is ~200-250 chars; reserve generously to avoid mid-build reallocs.
+	FString Csv;
+	Csv.Reserve(256 + Samples.Num() * 256);
+
+	Csv += TEXT("timestamp_utc,frame_number,fps,frame_ms,gt_ms,rt_ms,gpu_ms,rhi_ms,delta_seconds,")
+		TEXT("used_physical_mb,used_virtual_mb,available_physical_mb,draw_calls,primitives_drawn,")
+		TEXT("was_in_pie,engine_version\r\n");
+
+	for (const FBridgePerfSnapshot& S : Samples)
+	{
+		Csv += BridgePerfImpl::CsvEscape(S.CaptureTimeUtc);
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%lld"), static_cast<long long>(S.Timing.FrameNumber));
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%.3f"), S.Timing.Fps);
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%.3f"), S.Timing.FrameMs);
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%.3f"), S.Timing.GameThreadMs);
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%.3f"), S.Timing.RenderThreadMs);
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%.3f"), S.Timing.GpuMs);
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%.3f"), S.Timing.RhiMs);
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%.6f"), S.Timing.DeltaSeconds);
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%lld"), static_cast<long long>(S.Memory.UsedPhysicalMb));
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%lld"), static_cast<long long>(S.Memory.UsedVirtualMb));
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%lld"), static_cast<long long>(S.Memory.AvailablePhysicalMb));
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%d"), S.Render.DrawCalls);
+		Csv += TEXT(",");
+		Csv += FString::Printf(TEXT("%d"), S.Render.PrimitivesDrawn);
+		Csv += TEXT(",");
+		Csv += S.bWasInPie ? TEXT("true") : TEXT("false");
+		Csv += TEXT(",");
+		Csv += BridgePerfImpl::CsvEscape(S.EngineVersion);
+		Csv += TEXT("\r\n");
+	}
+
+	const bool bOk = FFileHelper::SaveStringToFile(Csv, *ResolvedPath,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	if (!bOk)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridgePerf: ExportPerfSamplesToCsv — failed to write '%s' (%d samples)"),
+			*ResolvedPath, Samples.Num());
+		return false;
+	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("UnrealBridgePerf: wrote %d perf samples to '%s'"),
+		Samples.Num(), *ResolvedPath);
+	return true;
 }
