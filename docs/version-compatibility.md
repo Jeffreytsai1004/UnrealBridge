@@ -81,9 +81,16 @@ Last verified versions:
 - UE 5.6 (point release: 5.6.1)
 - UE 5.7 (point release: 5.7.1)
 
-5.2 is configured in `tools/engines.local.json` with `enabled: false` — to
-flip it on, expect additional pre-5.3 shims (the matrix has not yet been
-exercised against it).
+**5.2 is known-broken and unsupported.** The matrix was exercised against
+it once (2026-05-06) and surfaced API drifts in PerfLibrary
+(`RHIGlobals.h` is 5.3+), CurveLibrary (`RCTM_SmartAuto` enum value,
+`FFloatCurve::GetName`), AnimLibrary (`USkeleton::GetCurveMetaDataNames`),
+AssetLibrary (`UStaticMesh::IsNaniteEnabled`), GameplayAbilityLibrary
+(`GameplayEffectComponent.h` is 5.4+), spread across 6 libraries — and
+the build aborted at the first failing module, so the full extent is
+larger. Supporting 5.2 would require either substantial inline shims or
+whole-library 5.3+ gates. Given UE 5.2 was released 2023-05 and is no
+longer in Epic's launcher, the project does not support it.
 
 ## Lowering the threshold
 
