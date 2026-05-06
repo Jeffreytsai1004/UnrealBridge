@@ -25,6 +25,10 @@
 #include "EngineUtils.h"
 #include "GameFramework/Actor.h"
 #include "WorldPartition/WorldPartition.h"
+#include "Engine/Texture.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "AssetRegistry/AssetData.h"
 
 // GAverageFPS / GAverageMS are defined in UnrealEngine.cpp and have no
 // canonical public header declaration — consumers (UnrealEdMisc, etc.) declare
@@ -117,6 +121,140 @@ namespace BridgePerfImpl
 		{
 			Rows.SetNum(Clamp);
 		}
+	}
+
+	/** Sort breakdown rows by (TotalBytes desc, Count desc, Key asc). Used for
+	 *  asset memory breakdowns where bytes are the primary perf signal. */
+	static void FinalizeBreakdownRowsByBytes(
+		TArray<FBridgePerfBreakdownRow>& Rows,
+		int32 MaxGroups)
+	{
+		Rows.Sort([](const FBridgePerfBreakdownRow& A, const FBridgePerfBreakdownRow& B)
+		{
+			if (A.TotalBytes != B.TotalBytes)
+			{
+				return A.TotalBytes > B.TotalBytes;
+			}
+			if (A.Count != B.Count)
+			{
+				return A.Count > B.Count;
+			}
+			return A.Key < B.Key;
+		});
+		const int32 Clamp = FMath::Clamp(MaxGroups, 1, 100000);
+		if (Rows.Num() > Clamp)
+		{
+			Rows.SetNum(Clamp);
+		}
+	}
+
+	/** On-disk size for a package, in bytes. Works on every UE version because
+	 *  IAssetRegistry::GetAssetSizeOnDisk doesn't exist on stock 5.3-5.7 —
+	 *  we always go through DoesPackageExist + FileSize. Returns 0 for
+	 *  never-saved or missing packages. */
+	static int64 GetPackageDiskSize(FName PackageName)
+	{
+		if (PackageName.IsNone())
+		{
+			return 0;
+		}
+		const FString PackageStr = PackageName.ToString();
+		FString Filename;
+		if (!FPackageName::DoesPackageExist(PackageStr, &Filename))
+		{
+			return 0;
+		}
+		const int64 Size = IFileManager::Get().FileSize(*Filename);
+		return Size > 0 ? Size : 0;
+	}
+
+	/** Extract the leading content folder from a package path, e.g.
+	 *  "/Game/Characters/Hero/T_Skin" → "/Game/Characters". One level deep —
+	 *  callers wanting deeper bucketing can post-process. */
+	static FString GetTopLevelFolder(const FString& PackagePath)
+	{
+		// PackagePath is the directory portion (e.g. "/Game/Characters/Hero").
+		// Strip a leading slash, take up to the first two components, re-prefix.
+		FString Trimmed = PackagePath;
+		if (Trimmed.StartsWith(TEXT("/")))
+		{
+			Trimmed.RemoveAt(0);
+		}
+		int32 SecondSlash = INDEX_NONE;
+		int32 FirstSlash = INDEX_NONE;
+		if (Trimmed.FindChar(TEXT('/'), FirstSlash))
+		{
+			Trimmed.FindChar(TEXT('/'), SecondSlash);
+			if (FirstSlash != INDEX_NONE)
+			{
+				int32 Pos = FirstSlash + 1;
+				int32 NextSlash = INDEX_NONE;
+				if (Trimmed.RightChop(Pos).FindChar(TEXT('/'), NextSlash))
+				{
+					return TEXT("/") + Trimmed.Left(Pos + NextSlash);
+				}
+			}
+		}
+		// No second slash — the whole thing is the top folder.
+		return TEXT("/") + Trimmed;
+	}
+
+	/** Add (or update) one breakdown bucket. Maintains Count, TotalBytes, and
+	 *  up to 3 sample paths in insertion order. */
+	static void AccumulateBucket(
+		TMap<FString, FBridgePerfBreakdownRow>& Buckets,
+		const FString& Key,
+		int64 BytesToAdd,
+		const FString& SamplePath)
+	{
+		FBridgePerfBreakdownRow& Bucket = Buckets.FindOrAdd(Key);
+		if (Bucket.Key.IsEmpty())
+		{
+			Bucket.Key = Key;
+		}
+		Bucket.Count += 1;
+		Bucket.TotalBytes += BytesToAdd;
+		if (Bucket.SamplePaths.Num() < 3)
+		{
+			Bucket.SamplePaths.Add(SamplePath);
+		}
+	}
+
+	/** Map a TextureCompressionSettings enum value (TC_*) to a coarse sampler
+	 *  type bucket name, mirroring UE's GetSamplerTypeForCompressionSettings
+	 *  conventions but without needing the texture loaded. Used by group_by
+	 *  ="sampler_type" in disk mode. */
+	static FString CompressionSettingsToSamplerBucket(const FString& TcEnumString)
+	{
+		// Strings come back as the enum identifier (e.g. "TC_Normalmap").
+		if (TcEnumString.Equals(TEXT("TC_Normalmap"), ESearchCase::IgnoreCase))
+		{
+			return TEXT("Normal");
+		}
+		if (TcEnumString.Equals(TEXT("TC_Masks"), ESearchCase::IgnoreCase) ||
+			TcEnumString.Equals(TEXT("TC_Alpha"), ESearchCase::IgnoreCase) ||
+			TcEnumString.Equals(TEXT("TC_Grayscale"), ESearchCase::IgnoreCase))
+		{
+			return TEXT("Masks");
+		}
+		if (TcEnumString.Contains(TEXT("HDR")) ||
+			TcEnumString.Contains(TEXT("HighDynamicRange")) ||
+			TcEnumString.Equals(TEXT("TC_HalfFloat"), ESearchCase::IgnoreCase) ||
+			TcEnumString.Equals(TEXT("TC_SingleFloat"), ESearchCase::IgnoreCase))
+		{
+			return TEXT("LinearColor");
+		}
+		if (TcEnumString.Equals(TEXT("TC_Displacementmap"), ESearchCase::IgnoreCase) ||
+			TcEnumString.Equals(TEXT("TC_VectorDisplacementmap"), ESearchCase::IgnoreCase))
+		{
+			return TEXT("Displacement");
+		}
+		if (TcEnumString.Equals(TEXT("TC_DistanceFieldFont"), ESearchCase::IgnoreCase))
+		{
+			return TEXT("DistanceFieldFont");
+		}
+		// TC_Default, TC_BC7, TC_LQ, etc. — color sampler.
+		return TEXT("Color");
 	}
 }
 
@@ -419,5 +557,206 @@ TArray<FBridgePerfBreakdownRow> UUnrealBridgePerfLibrary::GetWorldActorBreakdown
 	}
 
 	BridgePerfImpl::FinalizeBreakdownRows(Out, MaxGroups);
+	return Out;
+}
+
+// ─── Texture memory breakdown (M1-1) ────────────────────────
+
+namespace BridgePerfImpl
+{
+	/** Texture group_by mode. Translated once up front to avoid per-asset string compares. */
+	enum class ETextureGroupBy : uint8
+	{
+		Folder,
+		LodGroup,
+		CompressionFormat,
+		SamplerType,
+	};
+
+	static bool ParseTextureGroupBy(const FString& In, ETextureGroupBy& Out)
+	{
+		if (In.Equals(TEXT("folder"), ESearchCase::IgnoreCase)) { Out = ETextureGroupBy::Folder; return true; }
+		if (In.Equals(TEXT("lod_group"), ESearchCase::IgnoreCase)) { Out = ETextureGroupBy::LodGroup; return true; }
+		if (In.Equals(TEXT("compression_format"), ESearchCase::IgnoreCase)) { Out = ETextureGroupBy::CompressionFormat; return true; }
+		if (In.Equals(TEXT("sampler_type"), ESearchCase::IgnoreCase)) { Out = ETextureGroupBy::SamplerType; return true; }
+		return false;
+	}
+
+	static FString GetTextureGroupKeyFromAssetData(
+		const FAssetData& Data,
+		ETextureGroupBy Mode)
+	{
+		switch (Mode)
+		{
+		case ETextureGroupBy::Folder:
+		{
+			return GetTopLevelFolder(Data.PackagePath.ToString());
+		}
+		case ETextureGroupBy::LodGroup:
+		{
+			FString Tag;
+			if (Data.GetTagValue(TEXT("LODGroup"), Tag) && !Tag.IsEmpty())
+			{
+				return Tag;
+			}
+			return TEXT("(unspecified)");
+		}
+		case ETextureGroupBy::CompressionFormat:
+		{
+			FString Tag;
+			if (Data.GetTagValue(TEXT("CompressionSettings"), Tag) && !Tag.IsEmpty())
+			{
+				return Tag;
+			}
+			return TEXT("(unspecified)");
+		}
+		case ETextureGroupBy::SamplerType:
+		{
+			FString Tag;
+			if (Data.GetTagValue(TEXT("CompressionSettings"), Tag) && !Tag.IsEmpty())
+			{
+				return CompressionSettingsToSamplerBucket(Tag);
+			}
+			return TEXT("Color"); // TC_Default fallback
+		}
+		}
+		return TEXT("(unknown)");
+	}
+
+	static FString GetTextureGroupKeyFromObject(
+		const UTexture* Tex,
+		ETextureGroupBy Mode)
+	{
+		if (!Tex)
+		{
+			return TEXT("(null)");
+		}
+		switch (Mode)
+		{
+		case ETextureGroupBy::Folder:
+		{
+			const UPackage* Pkg = Tex->GetOutermost();
+			if (!Pkg) return TEXT("(transient)");
+			// Outer package name is /Game/Foo/Bar/PackageName — strip filename.
+			const FString PackageName = Pkg->GetName();
+			int32 LastSlash = INDEX_NONE;
+			if (PackageName.FindLastChar(TEXT('/'), LastSlash))
+			{
+				return GetTopLevelFolder(PackageName.Left(LastSlash));
+			}
+			return PackageName;
+		}
+		case ETextureGroupBy::LodGroup:
+		{
+			const UEnum* Enum = StaticEnum<TextureGroup>();
+			if (Enum)
+			{
+				return Enum->GetNameStringByValue(static_cast<int64>(Tex->LODGroup));
+			}
+			return FString::FromInt(static_cast<int32>(Tex->LODGroup));
+		}
+		case ETextureGroupBy::CompressionFormat:
+		{
+			const UEnum* Enum = StaticEnum<TextureCompressionSettings>();
+			if (Enum)
+			{
+				return Enum->GetNameStringByValue(static_cast<int64>(Tex->CompressionSettings));
+			}
+			return FString::FromInt(static_cast<int32>(Tex->CompressionSettings));
+		}
+		case ETextureGroupBy::SamplerType:
+		{
+			const UEnum* Enum = StaticEnum<TextureCompressionSettings>();
+			if (Enum)
+			{
+				const FString TcStr = Enum->GetNameStringByValue(static_cast<int64>(Tex->CompressionSettings));
+				return CompressionSettingsToSamplerBucket(TcStr);
+			}
+			return TEXT("Color");
+		}
+		}
+		return TEXT("(unknown)");
+	}
+}
+
+TArray<FBridgePerfBreakdownRow> UUnrealBridgePerfLibrary::GetTextureMemoryBreakdown(
+	const FString& GroupBy,
+	const FString& Mode,
+	int32 MaxGroups)
+{
+	TArray<FBridgePerfBreakdownRow> Out;
+
+	BridgePerfImpl::ETextureGroupBy ModeEnum = BridgePerfImpl::ETextureGroupBy::Folder;
+	if (!BridgePerfImpl::ParseTextureGroupBy(GroupBy, ModeEnum))
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridgePerf: GetTextureMemoryBreakdown bad group_by '%s' — expected ")
+			TEXT("folder | lod_group | compression_format | sampler_type"),
+			*GroupBy);
+		return Out;
+	}
+
+	const bool bRuntimeMode = Mode.Equals(TEXT("runtime"), ESearchCase::IgnoreCase);
+	const bool bDiskMode = Mode.IsEmpty() || Mode.Equals(TEXT("disk"), ESearchCase::IgnoreCase);
+	if (!bRuntimeMode && !bDiskMode)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridgePerf: GetTextureMemoryBreakdown bad mode '%s' — expected disk | runtime"),
+			*Mode);
+		return Out;
+	}
+
+	TMap<FString, FBridgePerfBreakdownRow> Buckets;
+	Buckets.Reserve(64);
+
+	if (bRuntimeMode)
+	{
+		// Iterate every loaded UTexture (covers Texture2D/Cube/Volume/etc.).
+		// Only objects already in memory are counted — this is the contract.
+		for (TObjectIterator<UTexture> It; It; ++It)
+		{
+			UTexture* Tex = *It;
+			if (!Tex || !IsValid(Tex))
+			{
+				continue;
+			}
+			const int64 Bytes = static_cast<int64>(
+				Tex->GetResourceSizeBytes(EResourceSizeMode::EstimatedTotal));
+			const FString Key = BridgePerfImpl::GetTextureGroupKeyFromObject(Tex, ModeEnum);
+			BridgePerfImpl::AccumulateBucket(Buckets, Key, Bytes, Tex->GetPathName());
+		}
+	}
+	else
+	{
+		// Disk mode: walk AssetRegistry, no LoadObject. Skip never-saved
+		// assets (TagsAndValues empty + no on-disk file → disk size 0 — they
+		// legitimately don't contribute to project disk footprint).
+		IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+		TArray<FAssetData> Assets;
+		AR.GetAssetsByClass(UTexture::StaticClass()->GetClassPathName(), Assets, /*bSearchSubClasses=*/true);
+
+		for (const FAssetData& Data : Assets)
+		{
+			if (!Data.IsValid())
+			{
+				continue;
+			}
+			const int64 Bytes = BridgePerfImpl::GetPackageDiskSize(Data.PackageName);
+			if (Bytes <= 0)
+			{
+				// Never-saved or missing on disk. Skip (matches doc contract).
+				continue;
+			}
+			const FString Key = BridgePerfImpl::GetTextureGroupKeyFromAssetData(Data, ModeEnum);
+			BridgePerfImpl::AccumulateBucket(Buckets, Key, Bytes, Data.GetSoftObjectPath().ToString());
+		}
+	}
+
+	Out.Reserve(Buckets.Num());
+	for (const TPair<FString, FBridgePerfBreakdownRow>& Pair : Buckets)
+	{
+		Out.Add(Pair.Value);
+	}
+	BridgePerfImpl::FinalizeBreakdownRowsByBytes(Out, MaxGroups);
 	return Out;
 }

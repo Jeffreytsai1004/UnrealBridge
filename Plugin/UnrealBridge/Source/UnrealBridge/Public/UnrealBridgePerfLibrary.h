@@ -290,4 +290,30 @@ public:
 		const FString& LevelFilter,
 		const FString& GroupBy = TEXT("class"),
 		int32 MaxGroups = 200);
+
+	/**
+	 * Aggregate UTexture assets by group with disk or runtime byte totals.
+	 *
+	 * `GroupBy` ∈ {"folder", "lod_group", "compression_format", "sampler_type"}:
+	 *   - "folder" → Key = leading content path (e.g. "/Game/Characters")
+	 *   - "lod_group" → Key = TextureGroup enum (e.g. "TEXTUREGROUP_World")
+	 *   - "compression_format" → Key = TextureCompressionSettings enum (e.g. "TC_Default")
+	 *   - "sampler_type" → Key = derived sampler type (e.g. "Color", "Normal", "Masks")
+	 *
+	 * `Mode` ∈ {"disk", "runtime"} (default "disk"):
+	 *   - "disk" walks AssetRegistry without loading textures; reads the package
+	 *     file size on disk via FPackageName::DoesPackageExist + IFileManager.
+	 *     Never-saved assets have empty TagsAndValues and are skipped.
+	 *   - "runtime" iterates loaded UTexture objects via TObjectIterator and
+	 *     calls GetResourceSizeBytes(EstimatedTotal). Reflects only currently
+	 *     loaded textures — large parts of the project will be invisible.
+	 *
+	 * `MaxGroups` clamped to [1, 1000]; rows sorted by TotalBytes descending,
+	 * ties broken by Count then Key.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static TArray<FBridgePerfBreakdownRow> GetTextureMemoryBreakdown(
+		const FString& GroupBy,
+		const FString& Mode = TEXT("disk"),
+		int32 MaxGroups = 50);
 };
