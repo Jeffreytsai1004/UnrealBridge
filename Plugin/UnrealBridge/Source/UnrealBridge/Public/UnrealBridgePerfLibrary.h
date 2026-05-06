@@ -187,6 +187,66 @@ struct FBridgePerfBreakdownRow
 	FString LevelName;
 };
 
+/**
+ * One bucket from the always-on frame-time histogram. The histogram is
+ * accumulated by `BridgePerfFrameHook` (registered at module startup, hooked
+ * onto FCoreDelegates::OnEndFrame). `GetFrameTimeHistogram` re-aggregates the
+ * fine internal buckets (0.5 ms each) into the caller's coarser buckets.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeHistogramBucket
+{
+	GENERATED_BODY()
+
+	/** Bucket lower edge in milliseconds, inclusive. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float LowerMs = 0.f;
+
+	/** Bucket upper edge in milliseconds, exclusive. FLT_MAX for the overflow bucket. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float UpperMs = 0.f;
+
+	/** Count of frames whose total time fell into [LowerMs, UpperMs). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 Count = 0;
+
+	/** Pre-computed fraction of total observed frames in this bucket, [0, 1]. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float Percent = 0.f;
+};
+
+/**
+ * One captured hitch (frame whose total time exceeded the caller's threshold).
+ * Logged by `BridgePerfFrameHook` into a small ring buffer; `GetHitchLog`
+ * filters by threshold and returns the most recent entries.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeHitchEntry
+{
+	GENERATED_BODY()
+
+	/** GFrameCounter value at hitch capture time. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 FrameNumber = 0;
+
+	/** FApp::GetCurrentTime() at hitch capture time, in seconds since launch. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	double TimestampSeconds = 0.0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float GameThreadMs = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float RenderThreadMs = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float GpuMs = 0.f;
+
+	/** Total wall-clock frame time, ms. (Sourced from FApp::GetCurrentTime() delta.) */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float TotalMs = 0.f;
+};
+
 /** Bundled perf snapshot returned by GetPerfSnapshot. */
 USTRUCT(BlueprintType)
 struct FBridgePerfSnapshot
@@ -410,4 +470,53 @@ public:
 	static TArray<FBridgePerfBreakdownRow> GetAssetSizeTopN(
 		const FString& ClassFilter,
 		int32 TopN = 50);
+
+	// ─── M2: time series & sampling ────────────────────────────
+
+	/**
+	 * Return a histogram of per-frame total time observed since module load
+	 * (or since the last `ResetFrameTimeHistogram` call). Frames are recorded
+	 * in fine 0.5 ms internal buckets by an OnEndFrame hook that started at
+	 * StartupModule; this UFUNCTION re-aggregates them into caller-supplied
+	 * `BucketMs`-wide buckets up to `MaxBucketMs`. Frames above `MaxBucketMs`
+	 * land in a single overflow bucket whose UpperMs is FLT_MAX.
+	 *
+	 * `BucketMs` clamped to [0.5, 50.0]; values below 0.5 round up to 0.5
+	 * (the internal resolution). `MaxBucketMs` clamped to [BucketMs, 200.0].
+	 *
+	 * Cost is O(internal_buckets) per call (~400 reads) — safe to call
+	 * at any rate. Bucket Percent fields sum to 1.0 across all buckets.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static TArray<FBridgeHistogramBucket> GetFrameTimeHistogram(
+		float BucketMs = 5.f,
+		float MaxBucketMs = 100.f);
+
+	/**
+	 * Return up to `MaxEntries` most-recent hitch entries (frames whose total
+	 * time exceeded the OnEndFrame hitch detector threshold) where each
+	 * entry's TotalMs is also at or above `ThresholdMs`. Entries are returned
+	 * newest-last (chronological order).
+	 *
+	 * The hitch detector logs every frame above an internal min threshold
+	 * (33 ms — i.e. anything below 30 fps); `ThresholdMs` re-filters that
+	 * captured set per call, so values below 33 will simply return whatever
+	 * was already captured. `MaxEntries` clamped to [1, 200].
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static TArray<FBridgeHitchEntry> GetHitchLog(
+		float ThresholdMs = 50.f,
+		int32 MaxEntries = 50);
+
+	/**
+	 * Zero out all internal frame-time histogram buckets so the next
+	 * `GetFrameTimeHistogram` returns only frames captured after this call.
+	 * Useful to baseline before/after a measured change.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static void ResetFrameTimeHistogram();
+
+	/** Drop every captured hitch entry. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static void ClearHitchLog();
 };

@@ -1,4 +1,5 @@
 #include "UnrealBridgePerfLibrary.h"
+#include "UnrealBridgeCompat.h"
 
 #include "Editor.h"
 #include "Editor/EditorEngine.h"
@@ -11,12 +12,14 @@
 #include "RHIStats.h"
 #include "RHIGlobals.h"
 #include "DynamicRHI.h"
+#include "HAL/CriticalSection.h"
 #include "HAL/PlatformTime.h"
 #include "HAL/PlatformMemory.h"
 #include "HAL/FileManager.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/Package.h"
 #include "Misc/App.h"
+#include "Misc/CoreDelegates.h"
 #include "Misc/EngineVersion.h"
 #include "Misc/DateTime.h"
 #include "Misc/PackageName.h"
@@ -1353,4 +1356,263 @@ TArray<FBridgePerfBreakdownRow> UUnrealBridgePerfLibrary::GetAssetSizeTopN(
 	}
 	BridgePerfImpl::FinalizeBreakdownRowsByBytes(Out, ClampedTopN);
 	return Out;
+}
+
+// ─── M2-4..6: always-on OnEndFrame hook (histogram + hitch log) ─
+
+namespace BridgePerfFrameHook
+{
+	/**
+	 * Storage strategy: every frame we increment one fine-grained 0.5 ms bucket
+	 * (FineBucketCount = 401, covering 0..200 ms + overflow). GetFrameTimeHistogram
+	 * re-aggregates these into the caller's coarser BucketMs buckets on demand.
+	 *
+	 * This decouples the OnEndFrame fast path (single index + atomic increment)
+	 * from the caller's view parameters. Storage is fixed at ~1.6 KB regardless
+	 * of how many different bucket sizes the agent asks for.
+	 */
+	static constexpr float FineBucketWidthMs = 0.5f;
+	static constexpr int32 FineBucketCount = 401; // 400 buckets * 0.5ms = 200ms + 1 overflow
+	static constexpr float MaxFineMs = static_cast<float>(FineBucketCount - 1) * FineBucketWidthMs; // 200ms
+
+	/** Below this threshold we don't bother logging the frame as a hitch.
+	 *  Anything >= 33 ms is already below 30 fps. Caller's GetHitchLog
+	 *  threshold filters further. */
+	static constexpr float HitchMinMs = 33.f;
+
+	/** Hard cap on the hitch ring buffer size. ~64 bytes/entry * 200 = 13 KB. */
+	static constexpr int32 MaxHitchEntries = 200;
+
+	/** Lock guards both buckets + hitches against simultaneous read from a UFUNCTION
+	 *  call and write from the OnEndFrame hook. Both run on GT in practice but the
+	 *  scoped lock is cheap and defensive. */
+	static FCriticalSection State_Lock;
+
+	static int32 FineBuckets[FineBucketCount] = {};
+	static int64 TotalFramesObserved = 0;
+
+	static TArray<FBridgeHitchEntry> Hitches;
+
+	static FDelegateHandle EndFrameHandle;
+	static double LastFrameStartSeconds = 0.0;
+	static bool bHasPriorFrame = false;
+
+	static void OnEndFrame()
+	{
+		// Compute frame duration from the FApp wall clock. FApp::GetCurrentTime()
+		// is set once per main loop iteration; the delta from the previous
+		// OnEndFrame fire is the wall-clock total frame time including idle.
+		// On the first call there's no prior sample so just record the time.
+		const double Now = FApp::GetCurrentTime();
+		float FrameMs = 0.f;
+		if (bHasPriorFrame)
+		{
+			FrameMs = static_cast<float>((Now - LastFrameStartSeconds) * 1000.0);
+		}
+		LastFrameStartSeconds = Now;
+		bHasPriorFrame = true;
+
+		// Defensive: if FApp clock hasn't moved (single-frame editor pause) skip.
+		if (FrameMs <= 0.f)
+		{
+			return;
+		}
+
+		// Drop the bucket index. Any frame above MaxFineMs lands in the overflow
+		// bucket (last index). Negative shouldn't happen but clamp anyway.
+		int32 Idx = FMath::FloorToInt(FrameMs / FineBucketWidthMs);
+		if (Idx < 0) Idx = 0;
+		if (Idx >= FineBucketCount) Idx = FineBucketCount - 1;
+
+		FScopeLock L(&State_Lock);
+		FineBuckets[Idx] += 1;
+		TotalFramesObserved += 1;
+
+		if (FrameMs >= HitchMinMs)
+		{
+			// Source per-thread breakdown from the same globals GetFrameTiming uses.
+			FBridgeHitchEntry Entry;
+			Entry.FrameNumber = static_cast<int64>(GFrameCounter);
+			Entry.TimestampSeconds = Now;
+			Entry.GameThreadMs = FPlatformTime::ToMilliseconds(GGameThreadTime);
+			Entry.RenderThreadMs = FPlatformTime::ToMilliseconds(GRenderThreadTime);
+			{
+				uint32 GpuCycles = 0;
+				for (uint32 i = 0; i < GNumExplicitGPUsForRendering; ++i)
+				{
+					GpuCycles += RHIGetGPUFrameCycles(i);
+				}
+				Entry.GpuMs = FPlatformTime::ToMilliseconds(GpuCycles);
+			}
+			Entry.TotalMs = FrameMs;
+
+			Hitches.Add(MoveTemp(Entry));
+			while (Hitches.Num() > MaxHitchEntries)
+			{
+				Hitches.RemoveAt(0, /*Count*/ 1, /*EAllowShrinking*/ EAllowShrinking::No);
+			}
+		}
+	}
+
+	void Register()
+	{
+		if (EndFrameHandle.IsValid()) return;
+		EndFrameHandle = FCoreDelegates::OnEndFrame.AddStatic(&OnEndFrame);
+	}
+
+	void Unregister()
+	{
+		if (!EndFrameHandle.IsValid()) return;
+		FCoreDelegates::OnEndFrame.Remove(EndFrameHandle);
+		EndFrameHandle.Reset();
+
+		FScopeLock L(&State_Lock);
+		FMemory::Memzero(FineBuckets, sizeof(FineBuckets));
+		TotalFramesObserved = 0;
+		Hitches.Empty();
+		bHasPriorFrame = false;
+	}
+
+	/** Snapshot the fine buckets + total frame count under a single lock. */
+	static void SnapshotFineBuckets(int32 (&OutBuckets)[FineBucketCount], int64& OutTotal)
+	{
+		FScopeLock L(&State_Lock);
+		FMemory::Memcpy(OutBuckets, FineBuckets, sizeof(FineBuckets));
+		OutTotal = TotalFramesObserved;
+	}
+
+	static void ResetHistogram()
+	{
+		FScopeLock L(&State_Lock);
+		FMemory::Memzero(FineBuckets, sizeof(FineBuckets));
+		TotalFramesObserved = 0;
+	}
+
+	static void ClearHitches()
+	{
+		FScopeLock L(&State_Lock);
+		Hitches.Empty();
+	}
+
+	static TArray<FBridgeHitchEntry> SnapshotHitches()
+	{
+		FScopeLock L(&State_Lock);
+		return Hitches;
+	}
+}
+
+TArray<FBridgeHistogramBucket> UUnrealBridgePerfLibrary::GetFrameTimeHistogram(
+	float BucketMs,
+	float MaxBucketMs)
+{
+	TArray<FBridgeHistogramBucket> Out;
+
+	// Snap caller's bucket width up to the internal resolution.
+	float Width = FMath::Clamp(BucketMs, BridgePerfFrameHook::FineBucketWidthMs, 50.f);
+	// Round Width to a multiple of FineBucketWidthMs so the re-aggregation is
+	// exact (no fractional fine-buckets in any output bucket).
+	const float Snapped = FMath::Max(BridgePerfFrameHook::FineBucketWidthMs,
+		FMath::RoundToFloat(Width / BridgePerfFrameHook::FineBucketWidthMs)
+		* BridgePerfFrameHook::FineBucketWidthMs);
+	Width = Snapped;
+
+	const float Max = FMath::Clamp(MaxBucketMs, Width, BridgePerfFrameHook::MaxFineMs);
+
+	int32 SnapshotBuckets[BridgePerfFrameHook::FineBucketCount];
+	int64 Total = 0;
+	BridgePerfFrameHook::SnapshotFineBuckets(SnapshotBuckets, Total);
+
+	const int32 OutBucketCount = FMath::CeilToInt(Max / Width);
+	Out.Reserve(OutBucketCount + 1);
+	for (int32 i = 0; i < OutBucketCount; ++i)
+	{
+		FBridgeHistogramBucket Row;
+		Row.LowerMs = static_cast<float>(i) * Width;
+		Row.UpperMs = Row.LowerMs + Width;
+		Out.Add(Row);
+	}
+	// Overflow bucket: anything >= Max goes here. UpperMs = FLT_MAX as documented.
+	{
+		FBridgeHistogramBucket Overflow;
+		Overflow.LowerMs = Max;
+		Overflow.UpperMs = FLT_MAX;
+		Out.Add(Overflow);
+	}
+
+	// Distribute fine-bucket counts into the output buckets. Bucket i covers
+	// fine indices [floor(LowerMs / FineWidth), floor(UpperMs / FineWidth)).
+	// Map each fine bucket's lower edge to the output bucket via integer math.
+	const float FineWidth = BridgePerfFrameHook::FineBucketWidthMs;
+	for (int32 FineIdx = 0; FineIdx < BridgePerfFrameHook::FineBucketCount; ++FineIdx)
+	{
+		const int32 Count = SnapshotBuckets[FineIdx];
+		if (Count == 0) continue;
+
+		const float FineLowerMs = static_cast<float>(FineIdx) * FineWidth;
+		// The last fine bucket holds the storage-level overflow (>= MaxFineMs).
+		// If caller's Max < MaxFineMs, this still goes into our visible overflow.
+		int32 OutIdx;
+		if (FineLowerMs >= Max || FineIdx == BridgePerfFrameHook::FineBucketCount - 1)
+		{
+			OutIdx = OutBucketCount; // overflow row
+		}
+		else
+		{
+			OutIdx = FMath::FloorToInt(FineLowerMs / Width);
+			if (OutIdx >= OutBucketCount) OutIdx = OutBucketCount;
+			if (OutIdx < 0) OutIdx = 0;
+		}
+		Out[OutIdx].Count += Count;
+	}
+
+	if (Total > 0)
+	{
+		const float TotalF = static_cast<float>(Total);
+		for (FBridgeHistogramBucket& Row : Out)
+		{
+			Row.Percent = static_cast<float>(Row.Count) / TotalF;
+		}
+	}
+
+	return Out;
+}
+
+TArray<FBridgeHitchEntry> UUnrealBridgePerfLibrary::GetHitchLog(
+	float ThresholdMs,
+	int32 MaxEntries)
+{
+	const int32 ClampedMax = FMath::Clamp(MaxEntries, 1, BridgePerfFrameHook::MaxHitchEntries);
+	const float Threshold = FMath::Max(ThresholdMs, 0.f);
+
+	TArray<FBridgeHitchEntry> All = BridgePerfFrameHook::SnapshotHitches();
+
+	// Filter by threshold (the captured set already has TotalMs >= HitchMinMs;
+	// caller's threshold tightens that further).
+	TArray<FBridgeHitchEntry> Out;
+	Out.Reserve(FMath::Min(All.Num(), ClampedMax));
+	for (const FBridgeHitchEntry& E : All)
+	{
+		if (E.TotalMs >= Threshold)
+		{
+			Out.Add(E);
+		}
+	}
+
+	if (Out.Num() > ClampedMax)
+	{
+		// Keep most recent (the snapshot is in chronological order).
+		const int32 Drop = Out.Num() - ClampedMax;
+		Out.RemoveAt(0, Drop, /*EAllowShrinking*/ EAllowShrinking::No);
+	}
+	return Out;
+}
+
+void UUnrealBridgePerfLibrary::ResetFrameTimeHistogram()
+{
+	BridgePerfFrameHook::ResetHistogram();
+}
+
+void UUnrealBridgePerfLibrary::ClearHitchLog()
+{
+	BridgePerfFrameHook::ClearHitches();
 }

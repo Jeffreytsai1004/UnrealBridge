@@ -25,6 +25,14 @@ namespace BridgeDebugState
 	void Unregister();
 }
 
+// Always-on perf hook (frame-time histogram + hitch log) — defined in
+// UnrealBridgePerfLibrary.cpp, lifetime tied to the module.
+namespace BridgePerfFrameHook
+{
+	void Register();
+	void Unregister();
+}
+
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealBridgeModule, Log, All);
 
 namespace
@@ -117,6 +125,7 @@ namespace
 void FUnrealBridgeModule::StartupModule()
 {
 	BridgeDebugState::Register();
+	BridgePerfFrameHook::Register();
 
 	// Map /Plugin/UnrealBridge/ -> this plugin's Shaders/ dir so UMaterialExpressionCustom
 	// nodes can #include "/Plugin/UnrealBridge/BridgeSnippets.ush" and friends.
@@ -256,6 +265,7 @@ void FUnrealBridgeModule::StartupModule()
 
 void FUnrealBridgeModule::ShutdownModule()
 {
+	BridgePerfFrameHook::Unregister();
 	BridgeDebugState::Unregister();
 
 	if (Discovery.IsValid())
