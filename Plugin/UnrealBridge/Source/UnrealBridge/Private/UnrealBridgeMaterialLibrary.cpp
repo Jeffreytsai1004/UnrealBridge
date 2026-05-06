@@ -1,6 +1,7 @@
 #include "UnrealBridgeMaterialLibrary.h"
 
 #include "Misc/EngineVersionComparison.h"
+#include "UnrealBridgeCompat.h"
 
 #if !UE_VERSION_OLDER_THAN(5, 7, 0)
 

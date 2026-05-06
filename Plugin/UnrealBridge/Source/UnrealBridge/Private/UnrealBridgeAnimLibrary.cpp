@@ -1,5 +1,6 @@
 #include "UnrealBridgeAnimLibrary.h"
 #include "Misc/EngineVersionComparison.h"
+#include "UnrealBridgeCompat.h"
 #include "Animation/AnimBlueprint.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimSequenceBase.h"
@@ -51,6 +52,30 @@
 #include "UObject/UObjectIterator.h"
 
 #define LOCTEXT_NAMESPACE "UnrealBridgeAnim"
+
+// ─── 5.3 access bypass ──────────────────────────────────────
+// UAnimGraphNode_Base::GetFNode / GetFNodeProperty / GetFNodeType were
+// protected before 5.4 (made public in 5.4). On 5.3 we expose them via a
+// using-declaration in a derived helper struct — compile-time access bypass,
+// never instantiated, never registered with UObject reflection.
+namespace BridgeAnimNodeAccess
+{
+#if UE_VERSION_OLDER_THAN(5, 4, 0)
+	struct FAccess : public UAnimGraphNode_Base
+	{
+		using UAnimGraphNode_Base::GetFNode;
+		using UAnimGraphNode_Base::GetFNodeProperty;
+		using UAnimGraphNode_Base::GetFNodeType;
+	};
+	inline FAnimNode_Base*  GetFNode(UAnimGraphNode_Base* N)         { return N ? static_cast<FAccess*>(N)->GetFNode() : nullptr; }
+	inline FStructProperty* GetFNodeProperty(UAnimGraphNode_Base* N) { return N ? static_cast<FAccess*>(N)->GetFNodeProperty() : nullptr; }
+	inline UScriptStruct*   GetFNodeType(UAnimGraphNode_Base* N)     { return N ? static_cast<FAccess*>(N)->GetFNodeType() : nullptr; }
+#else
+	inline FAnimNode_Base*  GetFNode(UAnimGraphNode_Base* N)         { return N ? N->GetFNode() : nullptr; }
+	inline FStructProperty* GetFNodeProperty(UAnimGraphNode_Base* N) { return N ? N->GetFNodeProperty() : nullptr; }
+	inline UScriptStruct*   GetFNodeType(UAnimGraphNode_Base* N)     { return N ? N->GetFNodeType() : nullptr; }
+#endif
+}
 
 // ─── Helpers ────────────────────────────────────────────────
 
@@ -222,7 +247,7 @@ TArray<FBridgeAnimGraphNodeInfo> UUnrealBridgeAnimLibrary::GetAnimGraphNodes(con
 		if (UAnimGraphNode_Base* AnimNode = Cast<UAnimGraphNode_Base>(Node))
 		{
 			// Try to get referenced animation asset
-			if (FAnimNode_Base* FNode = AnimNode->GetFNode())
+			if (FAnimNode_Base* FNode = BridgeAnimNodeAccess::GetFNode(AnimNode))
 			{
 				// Use the node's description text for detail (untranslated)
 				Info.Detail = BridgeAnimImpl::GetNodeTitleSource(AnimNode, ENodeTitleType::ListView);
@@ -321,7 +346,7 @@ TArray<FBridgeAnimSlotInfo> UUnrealBridgeAnimLibrary::GetAnimSlots(const FString
 			Info.NodeTitle = BridgeAnimImpl::GetNodeTitleSource(SlotNode);
 
 			// Access the internal FAnimNode_Slot to get SlotName
-			FStructProperty* NodeProp = SlotNode->GetFNodeProperty();
+			FStructProperty* NodeProp = BridgeAnimNodeAccess::GetFNodeProperty(SlotNode);
 			if (NodeProp)
 			{
 				FAnimNode_Slot* InternalNode = NodeProp->ContainerPtrToValuePtr<FAnimNode_Slot>(SlotNode);
@@ -352,8 +377,8 @@ namespace BridgeAnimImpl
 	/** Dump non-default UPROPERTY values on the FAnimNode struct backing an UAnimGraphNode_Base. */
 	void DumpAnimNodeProperties(UAnimGraphNode_Base* AnimNode, TArray<FString>& Out)
 	{
-		FAnimNode_Base* FNode = AnimNode ? AnimNode->GetFNode() : nullptr;
-		UScriptStruct* NodeStruct = AnimNode ? AnimNode->GetFNodeType() : nullptr;
+		FAnimNode_Base* FNode = BridgeAnimNodeAccess::GetFNode(AnimNode);
+		UScriptStruct* NodeStruct = BridgeAnimNodeAccess::GetFNodeType(AnimNode);
 		if (!FNode || !NodeStruct) return;
 
 		TArray<uint8> DefaultData;

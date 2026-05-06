@@ -1,5 +1,6 @@
 #include "UnrealBridgeBlueprintLibrary.h"
 #include "Misc/EngineVersionComparison.h"
+#include "UnrealBridgeCompat.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/SimpleConstructionScript.h"
@@ -77,7 +78,9 @@
 #include "Misc/SecureHash.h"
 #include "UObject/Script.h"
 #include "UObject/Stack.h"
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
 #include "Blueprint/BlueprintExceptionInfo.h"
+#endif
 #include "EngineUtils.h"
 #include "UObject/UObjectIterator.h"
 

@@ -1,4 +1,5 @@
 #include "UnrealBridgeCallLog.h"
+#include "UnrealBridgeCompat.h"
 
 FBridgeCallLog& FBridgeCallLog::Get()
 {

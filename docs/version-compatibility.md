@@ -1,11 +1,11 @@
 # UnrealBridge — engine version compatibility
 
-The plugin claims **Unreal Engine 5.4+**. The build matrix in
-`tools/build_matrix.py` has verified clean BuildPlugin against 5.4 and 5.7
-with the gating below; 5.2 / 5.3 / 5.5 / 5.6 are unverified and likely work
-for the 5.4+ tier (untested). Some features are gated to **5.7+** because
-they depend on engine APIs that don't exist or behave differently on 5.4
-(and presumably on the older 5.x's too).
+The plugin claims **Unreal Engine 5.3+**. The build matrix in
+`tools/build_matrix.py` has verified clean BuildPlugin against 5.3 / 5.4 /
+5.5 / 5.6 / 5.7 with the gating below; 5.2 is configured but disabled
+(would need additional pre-5.3 shims). Some features are gated to **5.7+**
+because they depend on engine APIs that don't exist or behave differently
+on the older 5.x's.
 
 This document lists what's gated. The build matrix in `tools/build_matrix.py`
 verifies the gates by compiling the plugin against each engine version.
@@ -42,6 +42,10 @@ These remain callable on 5.4 — the macro picks the right code path internally.
 | `UnrealBridgeGameplayAbilityLibrary::GetGameplayAbilityBlueprintInfo` and `ListGameplayAbilitiesByTag` | `UGameplayAbility::GetAssetTags()` | read legacy `CDO->AbilityTags` field |
 | `UnrealBridgeBlueprintLibrary::GetPIENodeCoverage` | `FKismetDebugUtilities::FindSourceNodeForCodeLocation` const-correctness | `const_cast<UFunction*>(Func)` |
 | `UnrealBridgeGameplayTagLibrary` — `EnsureSourceRedirectsPersisted`, `RenameGameplayTag`, `RemoveGameplayTagRedirect`, `ListGameplayTagRedirects` | 5.5 lacks `UGameplayTagsList::GameplayTagRedirects` (on `UGameplayTagsSettings` only); `RenameTagInINI` 3-arg overload added in 5.7 | `!UE_VERSION_OLDER_THAN(5, 6, 0)`: use `SourceTagList->GameplayTagRedirects`; legacy: parse per-source `+GameplayTagRedirects=` lines from disk ini. `RenameTagInINI` gated at `!UE_VERSION_OLDER_THAN(5, 7, 0)` for the `bRenameChildren` parameter |
+| `UnrealBridgeAnimLibrary` — `GetAnimGraphNodes`, `ListAnimSlotsInABP`, `DumpAnimNodeProperties` | `UAnimGraphNode_Base::GetFNode` / `GetFNodeProperty` / `GetFNodeType` were `protected` before 5.4 (made `public` in 5.4) | `BridgeAnimNodeAccess::*` shim — gated at `UE_VERSION_OLDER_THAN(5, 4, 0)`, exposes the protected getters via `using`-declaration in a derived helper struct (compile-time access bypass, never instantiated) |
+| All `TArray::Pop` / `RemoveAt` call sites with explicit shrinking flag | `EAllowShrinking` enum added in 5.4 (replaced `bool bAllowShrinking`) | `Plugin/.../Private/UnrealBridgeCompat.h` — defines `namespace EAllowShrinking { static constexpr bool No, Yes; }` on pre-5.4 so `Array.Pop(EAllowShrinking::No)` resolves to the legacy `bool` overload |
+| `UnrealBridgeBlueprintLibrary` — Blueprint exception/debug paths | `Blueprint/BlueprintExceptionInfo.h` is 5.4+ only (split out of `UObject/Script.h`) | `#if !UE_VERSION_OLDER_THAN(5, 4, 0)` around the include; on 5.3 `FBlueprintExceptionInfo` is reachable via the already-included `UObject/Script.h` |
+| `UnrealBridgeGameplayAbilityLibrary::ScanProperty` map/set iteration | 5.4 added `FScriptMapHelper::GetKeyPtr(FIterator)` / `GetValuePtr(FIterator)` / `FScriptSetHelper::GetElementPtr(FIterator)` overloads; 5.3 only has the `int32` overloads | Pass `*It` (dereferenced iterator → `int32`) to the legacy overload that exists in both 5.3 and 5.4+ — no version macro needed at the call site |
 
 ## How the gate macro works
 
@@ -53,10 +57,14 @@ These remain callable on 5.4 — the macro picks the right code path internally.
 #endif
 ```
 
-The threshold is **5.7.0** uniformly because that's the highest version we
-have validated. We have not yet tested 5.5 or 5.6 — some APIs currently
-gated as "5.7+" likely work on 5.5 or 5.6 too, but until the matrix proves
-it, we use the conservative cutoff.
+The 5.7 threshold for the whole-library and single-UFUNCTION gates above
+is conservative — those APIs may work on 5.5 / 5.6 too, but until the
+matrix proves a lowered threshold passes BuildPlugin (the gated-IN code
+isn't compiled on 5.5 / 5.6 yet, only the gated-OUT empty stubs are), we
+keep the cutoff at 5.7. Inline shims, by contrast, *are* compiled on
+every version in the matrix — so each `UE_VERSION_OLDER_THAN(M, m, 0)`
+gate listed in the table above is verified across all Last verified
+versions below.
 
 ## Verifying
 
@@ -67,14 +75,15 @@ python tools/build_matrix.py --only 5.7  # only 5.7
 ```
 
 Last verified versions:
+- UE 5.3 (point release: 5.3.2)
 - UE 5.4 (point release: 5.4.4)
 - UE 5.5 (point release: 5.5.4)
 - UE 5.6 (point release: 5.6.1)
 - UE 5.7 (point release: 5.7.1)
 
-5.2 / 5.3 / are unverified — likely work for the 5.4+ tier
-(everything except items in the tables above) but the matrix has not been
-exercised against them.
+5.2 is configured in `tools/engines.local.json` with `enabled: false` — to
+flip it on, expect additional pre-5.3 shims (the matrix has not yet been
+exercised against it).
 
 ## Lowering the threshold
 
