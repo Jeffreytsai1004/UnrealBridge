@@ -31,7 +31,9 @@ PUBLIC = REPO_ROOT / "Plugin" / "UnrealBridge" / "Source" / "UnrealBridge" / "Pu
 PRIVATE = REPO_ROOT / "Plugin" / "UnrealBridge" / "Source" / "UnrealBridge" / "Private"
 
 # Each entry: header stem, scope ("all" wraps every UFUNCTION in the class;
-# "function" wraps just one named UFUNCTION).
+# "function" wraps just one named UFUNCTION; "functions" wraps every name in
+# the supplied list — used when a library has a handful of 5.7-gated funcs
+# alongside many version-stable ones).
 TARGETS: list[dict] = [
     {"name": "UnrealBridgeChooserLibrary",        "scope": "all"},
     {"name": "UnrealBridgePoseSearchLibrary",     "scope": "all"},
@@ -40,6 +42,8 @@ TARGETS: list[dict] = [
     {"name": "UnrealBridgeDataTableLibrary",      "scope": "function", "function": "CopyDataTableRows"},
     {"name": "UnrealBridgeBlueprintLibrary",      "scope": "function", "function": "AddAsyncActionNode"},
     {"name": "UnrealBridgeGameplayAbilityLibrary","scope": "function", "function": "AddAbilityTaskNode"},
+    {"name": "UnrealBridgePerfLibrary",           "scope": "functions",
+        "functions": ["GetLumenDiagnostics", "GetNaniteStats"]},
 ]
 
 # Class line: `class [UNREALBRIDGE_API] UFoo : public UBlueprintFunctionLibrary`.
@@ -158,6 +162,12 @@ def process_target(target: dict, dry_run: bool) -> tuple[bool, int]:
         if not funcs:
             print(f"  SKIP {name} — wanted UFUNCTION '{wanted}' not found")
             return False, 0
+    elif scope == "functions":
+        wanted_set = set(target["functions"])
+        funcs = [f for f in funcs if f["name"] in wanted_set]
+        missing = wanted_set - {f["name"] for f in funcs}
+        if missing:
+            print(f"  WARN {name} — wanted UFUNCTIONs not found: {sorted(missing)}")
     if not funcs:
         print(f"  SKIP {name} — no UFUNCTIONs to stub")
         return False, 0

@@ -2332,6 +2332,126 @@ TArray<FBridgePerfBreakdownRow> UUnrealBridgePerfLibrary::GetLodDistribution(
 	return Out;
 }
 
+// ─── M3-4 / M3-5: Lumen + Nanite diagnostics (5.7+ only) ────
+
+#if !UE_VERSION_OLDER_THAN(5, 7, 0)
+
+#include "LumenVisualizationData.h"
+#include "Rendering/NaniteStreamingManager.h"
+
+namespace BridgePerfRender
+{
+	/** Look up an int32 CVar by name; return its current value, or `Default`
+	 *  when the CVar isn't registered. */
+	static int32 GetCVarInt(const TCHAR* Name, int32 Default)
+	{
+		IConsoleVariable* CV = IConsoleManager::Get().FindConsoleVariable(Name);
+		return CV ? CV->GetInt() : Default;
+	}
+
+	/** Look up an FString CVar by name (TCHAR view); return value or empty. */
+	static FString GetCVarString(const TCHAR* Name)
+	{
+		IConsoleVariable* CV = IConsoleManager::Get().FindConsoleVariable(Name);
+		return CV ? CV->GetString() : FString();
+	}
+}
+
+FBridgeLumenDiagnostics UUnrealBridgePerfLibrary::GetLumenDiagnostics()
+{
+	FBridgeLumenDiagnostics Out;
+	Out.EngineVersion = FEngineVersion::Current().ToString();
+
+	// FLumenVisualizationData is the only Lumen state with a public API
+	// surface. ENGINE_API getter; safe to call from GT. The data is lazily
+	// initialized by the renderer when the visualization viewmode console
+	// commands are first registered.
+	const FLumenVisualizationData& Vis = GetLumenVisualizationData();
+	Out.bAvailable = Vis.IsInitialized();
+	if (Out.bAvailable)
+	{
+		const FLumenVisualizationData::TModeMap& Modes = Vis.GetModeMap();
+		Out.VisualizationModes.Reserve(Modes.Num());
+		// TMultiMap doesn't dedupe by FName; use a TSet to keep the public
+		// list distinct and stable.
+		TSet<FString> Seen;
+		Seen.Reserve(Modes.Num());
+		for (const auto& Pair : Modes)
+		{
+			const FString Name = Pair.Key.ToString();
+			if (!Seen.Contains(Name))
+			{
+				Seen.Add(Name);
+				Out.VisualizationModes.Add(Name);
+			}
+		}
+		Out.VisualizationModes.Sort();
+	}
+
+	// Active mode = current value of r.Lumen.Visualize.ViewMode (FString).
+	Out.ActiveVisualizationMode = BridgePerfRender::GetCVarString(
+		FLumenVisualizationData::GetVisualizeConsoleCommandName());
+
+	// Lumen GI / reflections enable state — read the canonical CVars. These
+	// are int (0=off, non-zero=method id). The Lumen method values are
+	// stable enough across 5.6 / 5.7 to use a non-zero check; a UE major
+	// version that breaks this would also be 6.0+.
+	const int32 GiMethod = BridgePerfRender::GetCVarInt(
+		TEXT("r.DynamicGlobalIlluminationMethod"), 0);
+	const int32 ReflMethod = BridgePerfRender::GetCVarInt(
+		TEXT("r.ReflectionMethod"), 0);
+	// Method ID 1 = Lumen for both CVars (per EDynamicGlobalIlluminationMethod
+	// / EReflectionMethod). Anything else is None / Screen Space / Path Tracing.
+	Out.bLumenGiEnabled = (GiMethod == 1);
+	Out.bLumenReflectionsEnabled = (ReflMethod == 1);
+
+	return Out;
+}
+
+FBridgeNaniteStats UUnrealBridgePerfLibrary::GetNaniteStats()
+{
+	FBridgeNaniteStats Out;
+	Out.EngineVersion = FEngineVersion::Current().ToString();
+
+	// Nanite::GStreamingManager is an ENGINE_API global; the public getters
+	// are GT-callable. The HasResourceEntries / IsSafeForRendering reads
+	// query members maintained by the streaming manager; the per-frame
+	// counts (StatNumRootPages, StatVisibleSetSize, ...) are private.
+	Out.bAvailable = Nanite::GStreamingManager.HasResourceEntries();
+	Out.MaxStreamingPages = static_cast<int32>(Nanite::GStreamingManager.GetMaxStreamingPages());
+	Out.MaxHierarchyLevels = static_cast<int32>(Nanite::GStreamingManager.GetMaxHierarchyLevels());
+	Out.bIsSafeForRendering = Nanite::GStreamingManager.IsSafeForRendering();
+
+	// GT-side scan for components whose StaticMesh actually has Nanite data.
+	// Independent of the streaming manager's view; useful for "this scene has
+	// N Nanite mesh components" without needing a render frame to be in flight.
+	int32 NaniteCount = 0;
+	if (UWorld* World = BridgePerfImpl::GetEditorWorldForPerf())
+	{
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			AActor* Actor = *It;
+			if (!Actor || !IsValid(Actor)) continue;
+			TArray<UStaticMeshComponent*> SMCs;
+			Actor->GetComponents<UStaticMeshComponent>(SMCs);
+			for (UStaticMeshComponent* SMC : SMCs)
+			{
+				if (!SMC) continue;
+				UStaticMesh* SM = SMC->GetStaticMesh();
+				if (SM && SM->IsNaniteEnabled() && SM->HasValidNaniteData())
+				{
+					++NaniteCount;
+				}
+			}
+		}
+	}
+	Out.NaniteStaticMeshComponents = NaniteCount;
+
+	return Out;
+}
+
+#endif // !UE_VERSION_OLDER_THAN(5, 7, 0)
+
 // ─── M3-6: get_shadow_caster_breakdown ──────────────────────
 
 TArray<FBridgeActorRenderCost> UUnrealBridgePerfLibrary::GetShadowCasterBreakdown(int32 TopN)

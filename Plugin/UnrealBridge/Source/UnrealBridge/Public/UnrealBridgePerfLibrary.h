@@ -384,6 +384,99 @@ struct FBridgeActorRenderCost
 };
 
 /**
+ * Lumen runtime diagnostics (M3-4). Populated only on UE 5.7+. On older
+ * versions every field stays at its default-zero value and the UFUNCTION's
+ * stub logs a one-time warning. Public Lumen state in 5.7 is mostly
+ * visualization metadata — the surface-cache / probe counters live in the
+ * Renderer module's private `FLumenSceneData` and aren't reachable from a
+ * non-Renderer module. We expose what the engine API surfaces publicly:
+ * available visualization modes (proxy for "Lumen feature is wired up") and
+ * the active mode name (resolved via the `r.Lumen.Visualize.ViewMode` CVar).
+ */
+USTRUCT(BlueprintType)
+struct FBridgeLumenDiagnostics
+{
+	GENERATED_BODY()
+
+	/** True when GetLumenVisualizationData() returned an initialized instance.
+	 *  False on unsupported engine versions or when the visualization data
+	 *  module hasn't been loaded yet. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bAvailable = false;
+
+	/** Engine identifier returned by FEngineVersion::Current() — handy for
+	 *  attributing data when comparing snapshots across versions. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString EngineVersion;
+
+	/** All visualization mode names registered with FLumenVisualizationData
+	 *  (e.g. "Overview", "FinalLightingScene"). Empty when bAvailable=false. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	TArray<FString> VisualizationModes;
+
+	/** Currently active visualization mode according to r.Lumen.Visualize.ViewMode.
+	 *  Empty string when no mode is active or the CVar isn't registered. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString ActiveVisualizationMode;
+
+	/** True when r.DynamicGlobalIlluminationMethod is set to a value that
+	 *  enables Lumen GI. Determined at call time from the CVar. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bLumenGiEnabled = false;
+
+	/** True when r.ReflectionMethod is set to a value that enables Lumen
+	 *  reflections. Determined at call time from the CVar. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bLumenReflectionsEnabled = false;
+};
+
+/**
+ * Nanite runtime stats (M3-5). Populated only on UE 5.7+. Reads the public
+ * surface of `Nanite::GStreamingManager` (an ENGINE_API global) — capacity
+ * configuration the streaming manager exposes via its public getters. Nanite's
+ * per-frame cluster / visible-set counters live in private members and aren't
+ * accessible without Renderer module access; we record them as 0 with a note
+ * in the field comments. Non-zero default values indicate Nanite is at least
+ * configured even without per-frame telemetry.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeNaniteStats
+{
+	GENERATED_BODY()
+
+	/** True when GStreamingManager has at least one resource entry (HasResourceEntries()).
+	 *  False on unsupported engine versions or when no Nanite mesh has loaded. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bAvailable = false;
+
+	/** Nanite::GStreamingManager.GetMaxStreamingPages() — total streaming-page
+	 *  budget the manager was initialized with. Independent of how many are
+	 *  resident this frame. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 MaxStreamingPages = 0;
+
+	/** Nanite::GStreamingManager.GetMaxHierarchyLevels(). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 MaxHierarchyLevels = 0;
+
+	/** True when the streaming manager reported IsSafeForRendering() at call
+	 *  time. Useful as a "Nanite system actually initialized" check. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bIsSafeForRendering = false;
+
+	/** Estimated count of UStaticMesh assets in the editor world whose
+	 *  IsNaniteEnabled() / HasValidNaniteData() returns true. Aggregated on
+	 *  the GameThread by walking UStaticMeshComponents — does NOT require
+	 *  RT sync. 0 on unsupported engine versions. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 NaniteStaticMeshComponents = 0;
+
+	/** Engine version string for snapshot attribution. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString EngineVersion;
+};
+
+/**
  * Structured performance snapshots for UnrealBridge. Replaces parsing
  * `stat unit` text output. All values are read from engine globals + platform
  * APIs on the GameThread.
@@ -775,4 +868,23 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
 	static TArray<FBridgeActorRenderCost> GetShadowCasterBreakdown(int32 TopN = 30);
+
+	/**
+	 * Lumen runtime diagnostics. Returns default-zero on UE 5.6 and below;
+	 * on 5.7+ returns visualization mode list + Lumen-enabled CVar state.
+	 * See FBridgeLumenDiagnostics for what's surfaced and why surface-cache
+	 * / probe-count internals stay unimplemented.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static FBridgeLumenDiagnostics GetLumenDiagnostics();
+
+	/**
+	 * Nanite runtime stats. Returns default-zero on UE 5.6 and below;
+	 * on 5.7+ pulls capacity getters from `Nanite::GStreamingManager` plus
+	 * a GT-side scan for static-mesh components whose StaticMesh has Nanite
+	 * data enabled. Per-frame visible-cluster counters are not exposed
+	 * publicly and remain unreported.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static FBridgeNaniteStats GetNaniteStats();
 };
