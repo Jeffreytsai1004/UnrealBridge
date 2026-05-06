@@ -1,5 +1,10 @@
 #include "UnrealBridgeGameplayLibrary.h"
 
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "ScopedTransaction.h"
+#include "InputModifiers.h"
+
 #include "Editor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -2076,5 +2081,169 @@ bool UUnrealBridgeGameplayLibrary::PressKey(const FString& KeyName, bool bPresse
 		Slate.ProcessKeyUpEvent(KeyEvent);
 	}
 
+	return true;
+}
+
+// ─── Enhanced Input authoring (IA/IMC enumeration + IMC mappings) ───
+
+namespace BridgeInputAuthoringImpl
+{
+	/** Run an AssetRegistry query for a given UClass, optionally filtered by
+	 *  package-path prefix and capped at MaxResults. Returns asset paths. */
+	TArray<FString> ListAssetsOfClass(UClass* Class, const FString& PathFilter, int32 MaxResults)
+	{
+		TArray<FString> Result;
+		if (!Class) return Result;
+
+		IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+		FARFilter Filter;
+		Filter.bRecursivePaths = true;
+		Filter.bRecursiveClasses = true;
+		Filter.ClassPaths.Add(Class->GetClassPathName());
+		Filter.bIncludeOnlyOnDiskAssets = false;
+
+		TArray<FAssetData> Assets;
+		AR.GetAssets(Filter, Assets);
+
+		for (const FAssetData& A : Assets)
+		{
+			const FString PackagePath = A.PackageName.ToString();
+			if (!PathFilter.IsEmpty() && !PackagePath.StartsWith(PathFilter)) continue;
+			Result.Add(A.GetSoftObjectPath().ToString());
+			if (MaxResults > 0 && Result.Num() >= MaxResults) break;
+		}
+		Result.Sort();
+		return Result;
+	}
+}
+
+TArray<FString> UUnrealBridgeGameplayLibrary::ListInputActions(
+	const FString& ContentPathFilter, int32 MaxResults)
+{
+	return BridgeInputAuthoringImpl::ListAssetsOfClass(
+		UInputAction::StaticClass(), ContentPathFilter, MaxResults);
+}
+
+TArray<FString> UUnrealBridgeGameplayLibrary::ListInputMappingContexts(
+	const FString& ContentPathFilter, int32 MaxResults)
+{
+	return BridgeInputAuthoringImpl::ListAssetsOfClass(
+		UInputMappingContext::StaticClass(), ContentPathFilter, MaxResults);
+}
+
+TArray<FBridgeIMCMapping> UUnrealBridgeGameplayLibrary::GetInputMappingContextMappings(
+	const FString& MappingContextPath)
+{
+	TArray<FBridgeIMCMapping> Result;
+
+	UInputMappingContext* IMC = LoadObject<UInputMappingContext>(nullptr, *MappingContextPath);
+	if (!IMC)
+	{
+		UE_LOG(LogUnrealBridgeAgent, Warning,
+			TEXT("GetInputMappingContextMappings: failed to load IMC '%s'"), *MappingContextPath);
+		return Result;
+	}
+
+	for (const FEnhancedActionKeyMapping& M : IMC->GetMappings())
+	{
+		FBridgeIMCMapping Out;
+		if (const UInputAction* IA = M.Action)
+		{
+			Out.ActionPath = IA->GetPathName();
+			Out.ActionName = IA->GetName();
+		}
+		Out.KeyName = M.Key.ToString();
+
+		for (const TObjectPtr<UInputTrigger>& T : M.Triggers)
+		{
+			if (T) Out.TriggerClasses.Add(T->GetClass()->GetName());
+		}
+		for (const TObjectPtr<UInputModifier>& Mod : M.Modifiers)
+		{
+			if (Mod) Out.ModifierClasses.Add(Mod->GetClass()->GetName());
+		}
+		Result.Add(MoveTemp(Out));
+	}
+	return Result;
+}
+
+bool UUnrealBridgeGameplayLibrary::AddIAMappingToIMC(
+	const FString& MappingContextPath,
+	const FString& InputActionPath,
+	const FString& KeyName)
+{
+	UInputMappingContext* IMC = LoadObject<UInputMappingContext>(nullptr, *MappingContextPath);
+	if (!IMC)
+	{
+		UE_LOG(LogUnrealBridgeAgent, Warning,
+			TEXT("AddIAMappingToIMC: failed to load IMC '%s'"), *MappingContextPath);
+		return false;
+	}
+	UInputAction* IA = LoadObject<UInputAction>(nullptr, *InputActionPath);
+	if (!IA)
+	{
+		UE_LOG(LogUnrealBridgeAgent, Warning,
+			TEXT("AddIAMappingToIMC: failed to load IA '%s'"), *InputActionPath);
+		return false;
+	}
+	if (KeyName.IsEmpty())
+	{
+		UE_LOG(LogUnrealBridgeAgent, Warning, TEXT("AddIAMappingToIMC: KeyName is empty"));
+		return false;
+	}
+
+	const FKey Key(*KeyName);
+	if (!Key.IsValid())
+	{
+		UE_LOG(LogUnrealBridgeAgent, Warning,
+			TEXT("AddIAMappingToIMC: '%s' is not a recognised FKey"), *KeyName);
+		return false;
+	}
+
+	FScopedTransaction Transaction(FText::FromString(TEXT("Add IMC Mapping")));
+	IMC->Modify();
+	IMC->MapKey(IA, Key);
+	IMC->MarkPackageDirty();
+	return true;
+}
+
+bool UUnrealBridgeGameplayLibrary::RemoveIAMappingFromIMC(
+	const FString& MappingContextPath,
+	const FString& InputActionPath,
+	const FString& KeyName)
+{
+	UInputMappingContext* IMC = LoadObject<UInputMappingContext>(nullptr, *MappingContextPath);
+	if (!IMC)
+	{
+		UE_LOG(LogUnrealBridgeAgent, Warning,
+			TEXT("RemoveIAMappingFromIMC: failed to load IMC '%s'"), *MappingContextPath);
+		return false;
+	}
+	UInputAction* IA = LoadObject<UInputAction>(nullptr, *InputActionPath);
+	if (!IA)
+	{
+		UE_LOG(LogUnrealBridgeAgent, Warning,
+			TEXT("RemoveIAMappingFromIMC: failed to load IA '%s'"), *InputActionPath);
+		return false;
+	}
+
+	FScopedTransaction Transaction(FText::FromString(TEXT("Remove IMC Mapping")));
+	IMC->Modify();
+	if (KeyName.IsEmpty())
+	{
+		IMC->UnmapAllKeysFromAction(IA);
+	}
+	else
+	{
+		const FKey Key(*KeyName);
+		if (!Key.IsValid())
+		{
+			UE_LOG(LogUnrealBridgeAgent, Warning,
+				TEXT("RemoveIAMappingFromIMC: '%s' is not a recognised FKey"), *KeyName);
+			return false;
+		}
+		IMC->UnmapKey(IA, Key);
+	}
+	IMC->MarkPackageDirty();
 	return true;
 }

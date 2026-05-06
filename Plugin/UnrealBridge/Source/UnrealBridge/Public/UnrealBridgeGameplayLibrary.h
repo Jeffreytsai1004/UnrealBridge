@@ -96,6 +96,37 @@ struct FAgentObservation
 	TArray<FAgentVisibleActor> VisibleActors;
 };
 
+/** One row from a UInputMappingContext: an InputAction bound to a key,
+ *  with the per-mapping Trigger / Modifier classes the IMC stamped on it. */
+USTRUCT(BlueprintType)
+struct FBridgeIMCMapping
+{
+	GENERATED_BODY()
+
+	/** Asset path of the bound InputAction (e.g. "/Game/Input/IA_Move"). Empty if the action ptr was null. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	FString ActionPath;
+
+	/** Short asset name of the IA, for display (e.g. "IA_Move"). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	FString ActionName;
+
+	/** FKey::ToString() of the bound key (e.g. "SpaceBar", "Gamepad_FaceButton_Bottom"). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	FString KeyName;
+
+	/** Class names of UInputTrigger subclasses configured on this mapping
+	 *  (e.g. "InputTriggerHold", "InputTriggerPressed"). Per-mapping triggers
+	 *  ride on top of any IA-level triggers. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	TArray<FString> TriggerClasses;
+
+	/** Class names of UInputModifier subclasses configured on this mapping
+	 *  (e.g. "InputModifierDeadZone", "InputModifierNegate", "InputModifierSwizzleAxis"). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	TArray<FString> ModifierClasses;
+};
+
 /**
  * Agent sensors + navigation for PIE automation.
  *
@@ -810,6 +841,63 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
 	static bool TriggerInputAction(const FString& InputActionPath, float HoldSeconds = -1.0f);
+
+	// ─── Enhanced Input authoring (IA / IMC enumeration + binding) ───
+	//
+	// The runtime-injection surface above lets an agent press buttons; this
+	// block lets it discover what's there, inspect the binding configuration
+	// of an IMC, and add/remove key bindings. Pairs with
+	// `add_node_by_class_name` (in BlueprintLibrary) for wiring IA→callbacks
+	// on a Pawn BP.
+
+	/**
+	 * Find every UInputAction asset matching an optional content-path prefix.
+	 * @param ContentPathFilter  E.g. "/Game/Input/" — empty matches all.
+	 * @param MaxResults         0 = unlimited.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static TArray<FString> ListInputActions(const FString& ContentPathFilter, int32 MaxResults = 0);
+
+	/** Same as ListInputActions, for UInputMappingContext assets. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static TArray<FString> ListInputMappingContexts(const FString& ContentPathFilter, int32 MaxResults = 0);
+
+	/**
+	 * Enumerate the IA→Key mappings (with per-mapping Trigger / Modifier
+	 * classes) on a UInputMappingContext asset. Reads via the public
+	 * GetMappings() accessor, which returns DefaultKeyMappings.Mappings on
+	 * 5.7+ and the deprecated `Mappings` field on 5.3-5.6 — same surface,
+	 * version-portable.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static TArray<FBridgeIMCMapping> GetInputMappingContextMappings(const FString& MappingContextPath);
+
+	/**
+	 * Add an InputAction → Key binding to an IMC asset.
+	 * Calls UInputMappingContext::MapKey under FScopedTransaction so the edit
+	 * is undoable. Triggers / Modifiers are not configured here — UE creates
+	 * the mapping with empty arrays; the IA's own triggers still apply.
+	 *
+	 * @param KeyName  FKey identifier, e.g. "SpaceBar", "LeftMouseButton",
+	 *                 "Gamepad_FaceButton_Bottom". Parsed via FKey::FromString.
+	 * @return true on success; false if asset load fails or KeyName is invalid.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static bool AddIAMappingToIMC(
+		const FString& MappingContextPath,
+		const FString& InputActionPath,
+		const FString& KeyName);
+
+	/**
+	 * Remove a mapping from an IMC. If KeyName is empty, removes EVERY
+	 * binding of InputActionPath in the IMC (UnmapAllKeysFromAction);
+	 * otherwise unmaps just the specified IA→Key pair.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static bool RemoveIAMappingFromIMC(
+		const FString& MappingContextPath,
+		const FString& InputActionPath,
+		const FString& KeyName);
 
 	// ─── Extended debug drawing ──────────────────────────────────────
 	//
