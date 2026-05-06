@@ -5,7 +5,7 @@
   </p>
   <p align="center">
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
-    <a href="https://www.unrealengine.com/"><img src="https://img.shields.io/badge/Unreal%20Engine-5.4%2B-313131?logo=unrealengine" alt="UE5.4+"></a>
+    <a href="https://www.unrealengine.com/"><img src="https://img.shields.io/badge/Unreal%20Engine-5.3%2B-313131?logo=unrealengine" alt="UE5.3+"></a>
     <a href="https://www.python.org/"><img src="https://img.shields.io/badge/-Python-3776AB?logo=python&logoColor=white" alt="Python"></a>
     <img src="https://img.shields.io/badge/-C%2B%2B-00599C?logo=cplusplus&logoColor=white" alt="C++">
     <img src="https://img.shields.io/badge/platform-Windows-0078D6?logo=windows" alt="Windows">
@@ -50,7 +50,7 @@ flowchart LR
 
     Gen["tools/gen_manifest.py<br/>scans C++ headers"]
 
-    subgraph UE["Unreal Editor 5.4+"]
+    subgraph UE["Unreal Editor 5.3+"]
       Disc["FUnrealBridgeDiscovery<br/>UDP responder"]
       Server["FUnrealBridgeServer<br/>TCP · length-prefixed JSON"]
       Reactive["UnrealBridgeReactiveSubsystem<br/>+ 10 event adapters"]
@@ -247,7 +247,7 @@ Scripts run on the GameThread; captured stdout and stderr are separated by the s
 
 ```
 UnrealBridge/
-├── Plugin/UnrealBridge/         # UE 5.4+ Editor plugin (C++)
+├── Plugin/UnrealBridge/         # UE 5.3+ Editor plugin (C++)
 │   ├── Source/UnrealBridge/     #   TCP server + bridge libraries
 │   └── Content/Python/          #   Helpers auto-loaded into UE's Python env
 ├── .claude/skills/unreal-bridge/
@@ -260,7 +260,7 @@ UnrealBridge/
 
 ## Requirements
 
-- **Unreal Engine 5.4+** with `PythonScriptPlugin` and `GameplayAbilities` (both ship with the engine). The matrix at `tools/build_matrix.py` verifies builds against 5.4 and 5.7; some libraries (Chooser / PoseSearch / Material / Navigation + a few standalone UFUNCTIONs) require 5.7+ — see [docs/version-compatibility.md](docs/version-compatibility.md)
+- **Unreal Engine 5.3+** with `PythonScriptPlugin` and `GameplayAbilities` (both ship with the engine). The matrix at `tools/build_matrix.py` verifies clean BuildPlugin against 5.3.2 / 5.4.4 / 5.5.4 / 5.6.1 / 5.7.1; some libraries (Chooser / PoseSearch / Material / Navigation + a few standalone UFUNCTIONs) require 5.7+, and 5.3 needs a few inline shims — see [docs/version-compatibility.md](docs/version-compatibility.md). UE 5.2 and earlier are not supported.
 - **Windows 10/11** — the plugin itself is portable, but paths inside the helper scripts are hard-coded Windows-style
 - **Python 3.9+** on PATH
 - **Visual Studio 2022** with the UE workload — for plugin compilation

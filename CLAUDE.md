@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-UnrealBridge is a TCP bridge between external tools (Claude Code) and Unreal Engine 5.4+ (verified against 5.4 and 5.7 via `tools/build_matrix.py`; some libraries are gated to 5.7+ — see `docs/version-compatibility.md`). It consists of:
+UnrealBridge is a TCP bridge between external tools (Claude Code) and Unreal Engine 5.3+ (verified clean BuildPlugin against 5.3.2 / 5.4.4 / 5.5.4 / 5.6.1 / 5.7.1 via `tools/build_matrix.py`; some libraries are gated to 5.7+ and a few inline shims handle 5.3 — see `docs/version-compatibility.md`). UE 5.2 and earlier are not supported. It consists of:
 - A UE Editor plugin (`Plugin/UnrealBridge/`) that runs a TCP server inside the editor
 - A Python CLI client (`.claude/skills/unreal-bridge/scripts/bridge.py`) used by the `unreal-bridge` skill
 - API reference docs and helper scripts for querying/manipulating UE assets via Python
