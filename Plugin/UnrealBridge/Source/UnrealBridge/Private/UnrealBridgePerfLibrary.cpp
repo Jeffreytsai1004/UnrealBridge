@@ -2058,6 +2058,136 @@ namespace BridgePerfRender
 	}
 }
 
+// ─── M3-1: get_visible_primitives_by_material ─────────────────
+
+TArray<FBridgeMaterialRenderRow> UUnrealBridgePerfLibrary::GetVisiblePrimitivesByMaterial(
+	int32 ViewportIndex,
+	int32 TopN)
+{
+	(void)ViewportIndex; // reserved for future RT-side enrichment
+
+	TArray<FBridgeMaterialRenderRow> Out;
+	const int32 ClampedTopN = FMath::Clamp(TopN, 1, 1000);
+
+	UWorld* World = BridgePerfImpl::GetEditorWorldForPerf();
+	if (!World)
+	{
+		return Out;
+	}
+
+	// Per-material accumulator: (primitive_count, sample_actor_paths,
+	// triangle_total). Triangle total per material is the sum of LOD0
+	// triangles from each contributing primitive — overcounts when a single
+	// primitive references the same material on multiple slots, which is the
+	// common pattern but is what we want here ("how much geometry is this
+	// material driving").
+	struct FMatAcc
+	{
+		int32 PrimitiveCount = 0;
+		int64 TotalTriangles = 0;
+		TArray<FString> SampleActorPaths;
+	};
+	TMap<FString, FMatAcc> Acc;
+	Acc.Reserve(512);
+
+	// Walk every actor in every level; per-actor pull primitive components
+	// and accumulate into the material map. We use TActorIterator to skip
+	// the (rare) per-level Actors[] entries that are pending kill / unset.
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		AActor* Actor = *It;
+		if (!Actor || !IsValid(Actor)) continue;
+
+		TArray<UPrimitiveComponent*> Prims;
+		Actor->GetComponents<UPrimitiveComponent>(Prims);
+		if (Prims.Num() == 0) continue;
+
+		const FString ActorPath = Actor->GetPathName();
+		// Track which materials this actor already contributed to so we don't
+		// double-add the actor's path to the same material's sample list.
+		TSet<FString> SeenForActor;
+		SeenForActor.Reserve(8);
+
+		for (UPrimitiveComponent* Comp : Prims)
+		{
+			if (!Comp) continue;
+
+			// Triangles attributed to each material on this component:
+			// total component triangles split across distinct materials.
+			// This is approximate — different sections drive different tri
+			// budgets — but gives a useful proxy without hitting per-section
+			// data which lives in the render proxy.
+			TArray<UMaterialInterface*> CompMaterials;
+			Comp->GetUsedMaterials(CompMaterials);
+			if (CompMaterials.Num() == 0) continue;
+
+			const int64 CompTriangles =
+				BridgePerfRender::EstimateComponentTriangles(Comp);
+			TSet<UMaterialInterface*> DistinctMaterials;
+			DistinctMaterials.Reserve(CompMaterials.Num());
+			for (UMaterialInterface* M : CompMaterials)
+			{
+				if (M)
+				{
+					DistinctMaterials.Add(M);
+				}
+			}
+			const int32 DistinctCount = DistinctMaterials.Num();
+			if (DistinctCount == 0) continue;
+
+			const int64 PerMaterialTris =
+				DistinctCount > 0 ? (CompTriangles / DistinctCount) : 0;
+
+			for (UMaterialInterface* Mat : DistinctMaterials)
+			{
+				if (!Mat) continue;
+				const FString MatPath = Mat->GetPathName();
+				FMatAcc& Bucket = Acc.FindOrAdd(MatPath);
+				Bucket.PrimitiveCount += 1;
+				Bucket.TotalTriangles += PerMaterialTris;
+				if (Bucket.SampleActorPaths.Num() < 3 && !SeenForActor.Contains(MatPath))
+				{
+					Bucket.SampleActorPaths.Add(ActorPath);
+					SeenForActor.Add(MatPath);
+				}
+			}
+		}
+	}
+
+	// Materialize into output rows.
+	Out.Reserve(Acc.Num());
+	for (const TPair<FString, FMatAcc>& Entry : Acc)
+	{
+		FBridgeMaterialRenderRow Row;
+		Row.MaterialPath = Entry.Key;
+		Row.PrimitiveCount = Entry.Value.PrimitiveCount;
+		Row.TotalTriangles = Entry.Value.TotalTriangles;
+		Row.SampleActorPaths = Entry.Value.SampleActorPaths;
+		Out.Add(MoveTemp(Row));
+	}
+
+	// Sort by (PrimitiveCount desc, TotalTriangles desc, MaterialPath asc),
+	// then truncate to TopN.
+	Out.Sort([](const FBridgeMaterialRenderRow& A, const FBridgeMaterialRenderRow& B)
+	{
+		if (A.PrimitiveCount != B.PrimitiveCount)
+		{
+			return A.PrimitiveCount > B.PrimitiveCount;
+		}
+		if (A.TotalTriangles != B.TotalTriangles)
+		{
+			return A.TotalTriangles > B.TotalTriangles;
+		}
+		return A.MaterialPath < B.MaterialPath;
+	});
+	if (Out.Num() > ClampedTopN)
+	{
+		Out.SetNum(ClampedTopN);
+	}
+
+	return Out;
+}
+
 // ─── M3-2: get_actor_render_cost ────────────────────────────
 
 FBridgeActorRenderCost UUnrealBridgePerfLibrary::GetActorRenderCost(const FString& ActorPath)

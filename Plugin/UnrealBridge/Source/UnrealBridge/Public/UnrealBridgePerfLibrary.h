@@ -314,6 +314,40 @@ struct FBridgePerfSnapshot
 };
 
 /**
+ * One material → set of primitives using it (M3-1). Returned by
+ * `GetVisiblePrimitivesByMaterial`. The implementation is GT-only — it reads
+ * `UPrimitiveComponent::GetUsedMaterials` for every component in the editor
+ * world. This means the row reflects "what materials are referenced in this
+ * world" rather than "what materials are submitted in the current frame's
+ * culled view" — the latter would require RT-side `FScene` traversal which is
+ * intentionally avoided here to dodge the cross-version shim cost.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeMaterialRenderRow
+{
+	GENERATED_BODY()
+
+	/** Asset path of the material / material instance. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString MaterialPath;
+
+	/** Number of distinct UPrimitiveComponents that reference this material. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 PrimitiveCount = 0;
+
+	/** Total estimated triangle count contributed across those primitives.
+	 *  Static meshes use LOD0 triangle count from the asset RenderData; skeletal
+	 *  meshes use LOD0 triangle count from FSkeletalMeshRenderData. 0 when the
+	 *  asset is unavailable (e.g. unloaded). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 TotalTriangles = 0;
+
+	/** First 3 actor paths owning a primitive that uses this material. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	TArray<FString> SampleActorPaths;
+};
+
+/**
  * Per-actor render cost summary (M3-2). Returned by `GetActorRenderCost`
  * and `GetShadowCasterBreakdown`. GameThread-only — reads cached
  * UPrimitiveComponent properties; does not reflect culling state.
@@ -647,6 +681,32 @@ public:
 	static bool ExportPerfSamplesToCsv(const FString& OutputPath);
 
 	// ─── M3: render breakdown ──────────────────────────────────
+
+	/**
+	 * Aggregate primitive components by material, returning the top-N rows
+	 * by primitive count (ties broken by triangle total). Walks every
+	 * UPrimitiveComponent in the editor world on the GameThread; per
+	 * component reads `GetUsedMaterials()` (public API, stable 5.3-5.7) and
+	 * accumulates the asset path → primitive count + triangle total +
+	 * sample-actor list mapping.
+	 *
+	 * Limitations to advertise to callers:
+	 *   - GameThread-only — no RT-side scene traversal. The result reflects
+	 *     "what materials are referenced" not "what materials drew this
+	 *     frame after culling". For most diagnostic uses this is what you
+	 *     want; for true visible-set accounting hook UE Insights instead.
+	 *   - `ViewportIndex` is accepted but currently ignored — the editor
+	 *     world has one canonical material set regardless of which viewport
+	 *     is looking at it. Reserved for a future RT-side enrichment.
+	 *   - Triangle counts use LOD0; we don't try to guess current LOD per
+	 *     component (would need RT-side screen-size resolution).
+	 *
+	 * `TopN` clamped to [1, 1000].
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static TArray<FBridgeMaterialRenderRow> GetVisiblePrimitivesByMaterial(
+		int32 ViewportIndex = 0,
+		int32 TopN = 50);
 
 	/**
 	 * Per-actor render cost summary. Resolves `ActorPath` via
