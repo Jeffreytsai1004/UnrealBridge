@@ -759,4 +759,20 @@ public:
 	static TArray<FBridgePerfBreakdownRow> GetLodDistribution(
 		const FString& ClassFilter,
 		const FString& ActorFilter);
+
+	/**
+	 * Top-N actors ranked by dynamic-shadow caster cost estimate. Walks
+	 * the editor world on the GameThread, picks every actor with at least
+	 * one primitive component whose `bCastDynamicShadow=true`, computes the
+	 * actor's full render cost (same logic as `GetActorRenderCost`), and
+	 * returns them sorted by EstimatedTriangleCount descending.
+	 *
+	 * "Cost estimate" here = LOD0 triangle total of the shadow-casting
+	 * primitive components on the actor. Cascade / VSM page costs are
+	 * not modeled — those require RT state which we deliberately avoid.
+	 *
+	 * `TopN` clamped to [1, 1000].
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static TArray<FBridgeActorRenderCost> GetShadowCasterBreakdown(int32 TopN = 30);
 };

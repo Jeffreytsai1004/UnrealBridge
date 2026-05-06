@@ -2331,3 +2331,79 @@ TArray<FBridgePerfBreakdownRow> UUnrealBridgePerfLibrary::GetLodDistribution(
 	BridgePerfImpl::FinalizeBreakdownRows(Out, /*MaxGroups*/ 1000);
 	return Out;
 }
+
+// ─── M3-6: get_shadow_caster_breakdown ──────────────────────
+
+TArray<FBridgeActorRenderCost> UUnrealBridgePerfLibrary::GetShadowCasterBreakdown(int32 TopN)
+{
+	TArray<FBridgeActorRenderCost> Out;
+
+	const int32 ClampedTopN = FMath::Clamp(TopN, 1, 1000);
+
+	UWorld* World = BridgePerfImpl::GetEditorWorldForPerf();
+	if (!World)
+	{
+		return Out;
+	}
+
+	// Walk editor-world actors, keep only those with at least one
+	// shadow-casting primitive. We accumulate the full render cost row
+	// (same as GetActorRenderCost) but with the EstimatedTriangleCount
+	// computed from ONLY the shadow-casting subset of primitives — that's
+	// the actually-relevant cost number, since non-casting components
+	// don't contribute to shadow render time.
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		AActor* Actor = *It;
+		if (!Actor || !IsValid(Actor)) continue;
+
+		TArray<UPrimitiveComponent*> Prims;
+		Actor->GetComponents<UPrimitiveComponent>(Prims);
+		if (Prims.Num() == 0) continue;
+
+		// Filter to shadow-casting primitives only. If none, skip.
+		TArray<UPrimitiveComponent*> ShadowCasters;
+		ShadowCasters.Reserve(Prims.Num());
+		for (UPrimitiveComponent* Comp : Prims)
+		{
+			if (Comp && Comp->bCastDynamicShadow)
+			{
+				ShadowCasters.Add(Comp);
+			}
+		}
+		if (ShadowCasters.Num() == 0) continue;
+
+		// Build the cost row from the shadow-caster subset. The row's
+		// PrimitiveComponentCount + EstimatedTriangleCount thus reflect
+		// shadow-caster counts only, not the full actor.
+		FBridgeActorRenderCost Row =
+			BridgePerfRender::BuildActorCostFromComponents(Actor, ShadowCasters);
+		// Forced true (every contributing primitive cast a shadow).
+		Row.bCastsDynamicShadow = true;
+		if (Row.EstimatedTriangleCount > 0 || Row.PrimitiveComponentCount > 0)
+		{
+			Out.Add(MoveTemp(Row));
+		}
+	}
+
+	// Sort by (EstimatedTriangleCount desc, PrimitiveComponentCount desc,
+	// ActorPath asc) and clamp to TopN.
+	Out.Sort([](const FBridgeActorRenderCost& A, const FBridgeActorRenderCost& B)
+	{
+		if (A.EstimatedTriangleCount != B.EstimatedTriangleCount)
+		{
+			return A.EstimatedTriangleCount > B.EstimatedTriangleCount;
+		}
+		if (A.PrimitiveComponentCount != B.PrimitiveComponentCount)
+		{
+			return A.PrimitiveComponentCount > B.PrimitiveComponentCount;
+		}
+		return A.ActorPath < B.ActorPath;
+	});
+	if (Out.Num() > ClampedTopN)
+	{
+		Out.SetNum(ClampedTopN);
+	}
+
+	return Out;
+}
