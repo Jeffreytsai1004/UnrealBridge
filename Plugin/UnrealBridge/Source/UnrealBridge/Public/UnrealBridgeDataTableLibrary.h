@@ -36,6 +36,29 @@ struct FBridgeDataTableColumn
 	FString InnerTypeName;
 };
 
+/** Result of a CSV/JSON import (text or file). */
+USTRUCT(BlueprintType)
+struct FBridgeDataTableImportResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|DataTable")
+	bool bSuccess = false;
+
+	/** Asset path of the affected DataTable (filled for Create variants;
+	 *  echoes the input path for Import variants). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|DataTable")
+	FString AssetPath;
+
+	/** Number of rows present in the table after the import. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|DataTable")
+	int32 RowsImported = 0;
+
+	/** Errors / warnings reported by the importer (one entry per offending row). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|DataTable")
+	TArray<FString> Errors;
+};
+
 /** Overview of a DataTable. */
 USTRUCT(BlueprintType)
 struct FBridgeDataTableInfo
@@ -231,6 +254,48 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|DataTable")
 	static bool ImportDataTableFromJSON(const FString& DataTablePath, const FString& JsonFilePath);
+
+	/**
+	 * Import rows into an existing DataTable from a CSV string in memory.
+	 * Replaces all existing rows. Avoids the temp-file detour when the CSV
+	 * is generated programmatically (e.g. by an LLM).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|DataTable")
+	static FBridgeDataTableImportResult ImportDataTableFromCSVText(
+		const FString& DataTablePath, const FString& CsvContent);
+
+	/**
+	 * Import rows into an existing DataTable from a JSON string in memory.
+	 * Replaces all existing rows.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|DataTable")
+	static FBridgeDataTableImportResult ImportDataTableFromJSONText(
+		const FString& DataTablePath, const FString& JsonContent);
+
+	/**
+	 * Create a new DataTable asset at AssetPath using RowStructPath as the row
+	 * struct, populated from CSV content. Fails if AssetPath already exists or
+	 * RowStructPath cannot be resolved to a UScriptStruct.
+	 *
+	 * @param AssetPath        Content path for the new asset, e.g. "/Game/Data/DT_Items".
+	 * @param RowStructPath    Path or short name of the row struct (e.g. "/Game/Data/F_Item" or just "F_Item").
+	 * @param CsvContent       CSV body. First column = row name; subsequent columns = struct fields.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|DataTable")
+	static FBridgeDataTableImportResult CreateDataTableFromCSV(
+		const FString& AssetPath,
+		const FString& RowStructPath,
+		const FString& CsvContent);
+
+	/**
+	 * Create a new DataTable asset at AssetPath, populated from JSON content.
+	 * Fails if AssetPath already exists or RowStructPath cannot be resolved.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|DataTable")
+	static FBridgeDataTableImportResult CreateDataTableFromJSON(
+		const FString& AssetPath,
+		const FString& RowStructPath,
+		const FString& JsonContent);
 
 	// ─── Schema introspection / bulk ops ──────────────────────
 

@@ -6,8 +6,11 @@
 #include "AssetRegistry/ARFilter.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/PackageName.h"
 #include "ScopedTransaction.h"
 #include "UObject/UnrealType.h"
+#include "UObject/Package.h"
+#include "UObject/SavePackage.h"
 
 #define LOCTEXT_NAMESPACE "UnrealBridgeDataTable"
 
@@ -938,6 +941,144 @@ TMap<FString, FString> UUnrealBridgeDataTableLibrary::GetDataTableRowDefaults(co
 
 	RowStruct->DestroyStruct(Buffer.GetData());
 	return Result;
+}
+
+// ─── Text-input + create-from-text imports ──────────────────
+
+namespace BridgeDataTableImpl
+{
+	/** Resolve a row struct by content path (e.g. "/Game/Data/F_Item")
+	 *  or short name (e.g. "F_Item"). Returns nullptr on failure. */
+	UScriptStruct* ResolveRowStruct(const FString& PathOrShortName)
+	{
+		if (PathOrShortName.IsEmpty()) return nullptr;
+		// Path form: try LoadObject directly.
+		if (PathOrShortName.StartsWith(TEXT("/")))
+		{
+			if (UScriptStruct* S = LoadObject<UScriptStruct>(nullptr, *PathOrShortName)) return S;
+		}
+		// Short-name form: scan all loaded UScriptStructs.
+		return FindFirstObject<UScriptStruct>(*PathOrShortName, EFindFirstObjectOptions::None);
+	}
+
+	/** Run a CSV/JSON importer against an existing DataTable; pack the result. */
+	template <typename TImporter>
+	FBridgeDataTableImportResult RunImport(UDataTable* DT, const FString& AssetPath, TImporter Importer)
+	{
+		FBridgeDataTableImportResult Out;
+		Out.AssetPath = AssetPath;
+		if (!DT) return Out;
+
+		FScopedTransaction Transaction(LOCTEXT("ImportRowsText", "Import DataTable Rows"));
+		DT->Modify();
+		FDataTableEditorUtils::BroadcastPreChange(DT, FDataTableEditorUtils::EDataTableChangeInfo::RowList);
+
+		const TArray<FString> Errors = Importer(DT);
+
+		FDataTableEditorUtils::BroadcastPostChange(DT, FDataTableEditorUtils::EDataTableChangeInfo::RowList);
+		DT->MarkPackageDirty();
+
+		Out.Errors = Errors;
+		Out.RowsImported = DT->GetRowMap().Num();
+		Out.bSuccess = Errors.Num() == 0;
+		return Out;
+	}
+
+	/** Create a brand-new UDataTable asset at AssetPath with RowStruct. Returns
+	 *  nullptr (with a populated error string) if the asset already exists or
+	 *  the package can't be created. */
+	UDataTable* CreateDataTableAsset(const FString& AssetPath, UScriptStruct* RowStruct, FString& OutError)
+	{
+		if (!RowStruct) { OutError = TEXT("Row struct could not be resolved"); return nullptr; }
+		if (AssetPath.IsEmpty()) { OutError = TEXT("AssetPath is empty"); return nullptr; }
+		if (!AssetPath.StartsWith(TEXT("/")))
+		{
+			OutError = FString::Printf(TEXT("AssetPath must be a content path (e.g. /Game/...), got '%s'"), *AssetPath);
+			return nullptr;
+		}
+
+		// Refuse to clobber an existing asset.
+		if (LoadObject<UObject>(nullptr, *AssetPath))
+		{
+			OutError = FString::Printf(TEXT("Asset already exists at %s"), *AssetPath);
+			return nullptr;
+		}
+
+		// /Game/Data/DT_Items → package name = full path, asset name = short tail.
+		const FString AssetName = FPackageName::GetShortName(AssetPath);
+		UPackage* Package = CreatePackage(*AssetPath);
+		if (!Package) { OutError = TEXT("CreatePackage failed"); return nullptr; }
+		Package->FullyLoad();
+
+		UDataTable* DT = NewObject<UDataTable>(
+			Package, *AssetName, RF_Public | RF_Standalone | RF_Transactional);
+		if (!DT) { OutError = TEXT("NewObject<UDataTable> failed"); return nullptr; }
+
+		DT->RowStruct = RowStruct;
+		FAssetRegistryModule::AssetCreated(DT);
+		Package->MarkPackageDirty();
+		return DT;
+	}
+}
+
+FBridgeDataTableImportResult UUnrealBridgeDataTableLibrary::ImportDataTableFromCSVText(
+	const FString& DataTablePath, const FString& CsvContent)
+{
+	UDataTable* DT = BridgeDataTableImpl::LoadDT(DataTablePath);
+	return BridgeDataTableImpl::RunImport(DT, DataTablePath,
+		[&](UDataTable* T) { return T->CreateTableFromCSVString(CsvContent); });
+}
+
+FBridgeDataTableImportResult UUnrealBridgeDataTableLibrary::ImportDataTableFromJSONText(
+	const FString& DataTablePath, const FString& JsonContent)
+{
+	UDataTable* DT = BridgeDataTableImpl::LoadDT(DataTablePath);
+	return BridgeDataTableImpl::RunImport(DT, DataTablePath,
+		[&](UDataTable* T) { return T->CreateTableFromJSONString(JsonContent); });
+}
+
+FBridgeDataTableImportResult UUnrealBridgeDataTableLibrary::CreateDataTableFromCSV(
+	const FString& AssetPath, const FString& RowStructPath, const FString& CsvContent)
+{
+	FBridgeDataTableImportResult Out;
+	Out.AssetPath = AssetPath;
+
+	UScriptStruct* RowStruct = BridgeDataTableImpl::ResolveRowStruct(RowStructPath);
+	FString CreateError;
+	UDataTable* DT = BridgeDataTableImpl::CreateDataTableAsset(AssetPath, RowStruct, CreateError);
+	if (!DT)
+	{
+		Out.Errors.Add(CreateError);
+		return Out;
+	}
+
+	const TArray<FString> Errors = DT->CreateTableFromCSVString(CsvContent);
+	Out.Errors = Errors;
+	Out.RowsImported = DT->GetRowMap().Num();
+	Out.bSuccess = Errors.Num() == 0;
+	return Out;
+}
+
+FBridgeDataTableImportResult UUnrealBridgeDataTableLibrary::CreateDataTableFromJSON(
+	const FString& AssetPath, const FString& RowStructPath, const FString& JsonContent)
+{
+	FBridgeDataTableImportResult Out;
+	Out.AssetPath = AssetPath;
+
+	UScriptStruct* RowStruct = BridgeDataTableImpl::ResolveRowStruct(RowStructPath);
+	FString CreateError;
+	UDataTable* DT = BridgeDataTableImpl::CreateDataTableAsset(AssetPath, RowStruct, CreateError);
+	if (!DT)
+	{
+		Out.Errors.Add(CreateError);
+		return Out;
+	}
+
+	const TArray<FString> Errors = DT->CreateTableFromJSONString(JsonContent);
+	Out.Errors = Errors;
+	Out.RowsImported = DT->GetRowMap().Num();
+	Out.bSuccess = Errors.Num() == 0;
+	return Out;
 }
 
 #undef LOCTEXT_NAMESPACE
