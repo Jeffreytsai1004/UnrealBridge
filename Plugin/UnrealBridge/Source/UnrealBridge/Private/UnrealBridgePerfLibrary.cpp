@@ -19,6 +19,7 @@
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/EngineVersionComparison.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/Package.h"
 #include "Misc/App.h"
@@ -41,6 +42,12 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "AssetRegistry/AssetData.h"
+#include "Components/PrimitiveComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/SkinnedMeshComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Materials/MaterialInterface.h"
+#include "HAL/IConsoleManager.h"
 
 // GAverageFPS / GAverageMS are defined in UnrealEngine.cpp and have no
 // canonical public header declaration — consumers (UnrealEdMisc, etc.) declare
@@ -1907,4 +1914,290 @@ bool UUnrealBridgePerfLibrary::ExportPerfSamplesToCsv(const FString& OutputPath)
 		TEXT("UnrealBridgePerf: wrote %d perf samples to '%s'"),
 		Samples.Num(), *ResolvedPath);
 	return true;
+}
+
+// ─── M3: render breakdown helpers ───────────────────────────
+
+namespace BridgePerfRender
+{
+	/** LOD0 triangle count for a static mesh asset (0 when unavailable). */
+	static int64 GetStaticMeshLod0Triangles(const UStaticMesh* Mesh)
+	{
+		if (!Mesh)
+		{
+			return 0;
+		}
+		const FStaticMeshRenderData* RD = Mesh->GetRenderData();
+		if (!RD || RD->LODResources.Num() == 0)
+		{
+			return 0;
+		}
+		const FStaticMeshLODResources& LOD0 = RD->LODResources[0];
+		return static_cast<int64>(LOD0.GetNumTriangles());
+	}
+
+	/** LOD0 triangle count for a skeletal mesh asset (0 when unavailable). */
+	static int64 GetSkeletalMeshLod0Triangles(const USkeletalMesh* Mesh)
+	{
+		if (!Mesh)
+		{
+			return 0;
+		}
+		const FSkeletalMeshRenderData* RD = Mesh->GetResourceForRendering();
+		if (!RD || RD->LODRenderData.Num() == 0)
+		{
+			return 0;
+		}
+		return static_cast<int64>(RD->LODRenderData[0].GetTotalFaces());
+	}
+
+	/** Best-effort "current LOD index" for a primitive component:
+	 *   - StaticMeshComponent: ForcedLodModel - 1 when forced (>0); else 0.
+	 *   - SkeletalMesh / Skinned: GetPredictedLODLevel() if non-negative; else 0.
+	 *  Returns -1 when the component type isn't recognized as mesh-like. */
+	static int32 ResolveComponentLodIndex(const UPrimitiveComponent* Comp)
+	{
+		if (!Comp)
+		{
+			return -1;
+		}
+		if (const UStaticMeshComponent* SMC = Cast<UStaticMeshComponent>(Comp))
+		{
+			// Direct field access — works on every UE version (5.3 has no
+			// GetForcedLodModel inline accessor; the field is public).
+			const int32 Forced = SMC->ForcedLodModel;
+			return Forced > 0 ? (Forced - 1) : 0;
+		}
+		if (const USkinnedMeshComponent* Sk = Cast<USkinnedMeshComponent>(Comp))
+		{
+			const int32 Predicted = Sk->GetPredictedLODLevel();
+			return Predicted >= 0 ? Predicted : 0;
+		}
+		return -1;
+	}
+
+	/** Pull the mesh asset path that drives this component's LOD bucket. */
+	static FString GetMeshAssetPathForLod(const UPrimitiveComponent* Comp)
+	{
+		if (!Comp) return FString();
+		if (const UStaticMeshComponent* SMC = Cast<UStaticMeshComponent>(Comp))
+		{
+			if (UStaticMesh* SM = SMC->GetStaticMesh())
+			{
+				return SM->GetPathName();
+			}
+		}
+		if (const USkeletalMeshComponent* SkC = Cast<USkeletalMeshComponent>(Comp))
+		{
+			if (USkeletalMesh* Sk = SkC->GetSkeletalMeshAsset())
+			{
+				return Sk->GetPathName();
+			}
+		}
+		return FString();
+	}
+
+	/** Aggregate per-component triangle estimate for an actor.
+	 *  Static mesh components → LOD0 tri count from RenderData.
+	 *  Skeletal mesh components → LOD0 tri count from RenderData.
+	 *  Other primitive types → 0. */
+	static int64 EstimateComponentTriangles(const UPrimitiveComponent* Comp)
+	{
+		if (!Comp) return 0;
+		if (const UStaticMeshComponent* SMC = Cast<UStaticMeshComponent>(Comp))
+		{
+			return GetStaticMeshLod0Triangles(SMC->GetStaticMesh());
+		}
+		if (const USkeletalMeshComponent* SkC = Cast<USkeletalMeshComponent>(Comp))
+		{
+			return GetSkeletalMeshLod0Triangles(SkC->GetSkeletalMeshAsset());
+		}
+		return 0;
+	}
+
+	/** Build per-actor render cost row from a UPrimitiveComponent set.
+	 *  Used both by GetActorRenderCost and GetShadowCasterBreakdown. */
+	static FBridgeActorRenderCost BuildActorCostFromComponents(
+		const AActor* Actor,
+		const TArray<UPrimitiveComponent*>& Comps)
+	{
+		FBridgeActorRenderCost Out;
+		if (!Actor || Comps.Num() == 0)
+		{
+			return Out;
+		}
+		Out.ActorPath = Actor->GetPathName();
+		Out.PrimitiveComponentCount = Comps.Num();
+
+		TSet<FString> SeenMaterials;
+		SeenMaterials.Reserve(Comps.Num() * 2);
+
+		for (UPrimitiveComponent* Comp : Comps)
+		{
+			if (!Comp) continue;
+			Out.MaterialSlotCount += Comp->GetNumMaterials();
+			Out.EstimatedTriangleCount += EstimateComponentTriangles(Comp);
+			if (Comp->bCastDynamicShadow)
+			{
+				Out.bCastsDynamicShadow = true;
+			}
+			TArray<UMaterialInterface*> MatList;
+			Comp->GetUsedMaterials(MatList);
+			for (UMaterialInterface* Mat : MatList)
+			{
+				if (!Mat) continue;
+				const FString Path = Mat->GetPathName();
+				if (!SeenMaterials.Contains(Path))
+				{
+					SeenMaterials.Add(Path);
+					Out.Materials.Add(Path);
+				}
+			}
+		}
+		return Out;
+	}
+}
+
+// ─── M3-2: get_actor_render_cost ────────────────────────────
+
+FBridgeActorRenderCost UUnrealBridgePerfLibrary::GetActorRenderCost(const FString& ActorPath)
+{
+	FBridgeActorRenderCost Out;
+
+	UWorld* World = BridgePerfImpl::GetEditorWorldForPerf();
+	if (!World)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridgePerf: GetActorRenderCost — no editor world available"));
+		return Out;
+	}
+	if (ActorPath.IsEmpty())
+	{
+		return Out;
+	}
+
+	// Resolve the actor by path. FindObject<AActor> on the qualified path
+	// works for "/Game/Map.Map:PersistentLevel.<ActorName>" and equivalent.
+	AActor* Actor = FindObject<AActor>(nullptr, *ActorPath);
+	if (!Actor)
+	{
+		// Fallback: walk World->GetLevels() and match by GetPathName().
+		// Slower but covers cases where FindObject couldn't resolve the
+		// outer chain (level not loaded into the search path, etc.).
+		for (ULevel* Level : World->GetLevels())
+		{
+			if (!Level) continue;
+			for (AActor* Cand : Level->Actors)
+			{
+				if (Cand && Cand->GetPathName() == ActorPath)
+				{
+					Actor = Cand;
+					break;
+				}
+			}
+			if (Actor) break;
+		}
+	}
+	if (!Actor)
+	{
+		return Out;
+	}
+
+	TArray<UPrimitiveComponent*> Prims;
+	Actor->GetComponents<UPrimitiveComponent>(Prims);
+	return BridgePerfRender::BuildActorCostFromComponents(Actor, Prims);
+}
+
+// ─── M3-3: get_lod_distribution ─────────────────────────────
+
+TArray<FBridgePerfBreakdownRow> UUnrealBridgePerfLibrary::GetLodDistribution(
+	const FString& ClassFilter,
+	const FString& ActorFilter)
+{
+	TArray<FBridgePerfBreakdownRow> Out;
+
+	UWorld* World = BridgePerfImpl::GetEditorWorldForPerf();
+	if (!World)
+	{
+		return Out;
+	}
+
+	const FString TrimmedClassFilter = ClassFilter.TrimStartAndEnd();
+	const FString TrimmedActorFilter = ActorFilter.TrimStartAndEnd();
+
+	// Map (mesh_path, lod_index) → accumulator.
+	struct FLodAcc
+	{
+		int32 Count = 0;
+		TArray<FString> Samples;
+	};
+	using FKey = TPair<FString, int32>;
+	TMap<FKey, FLodAcc> Acc;
+	Acc.Reserve(256);
+
+	for (ULevel* Level : World->GetLevels())
+	{
+		if (!Level) continue;
+		for (AActor* Actor : Level->Actors)
+		{
+			if (!Actor || !IsValid(Actor)) continue;
+
+			if (!TrimmedActorFilter.IsEmpty())
+			{
+				if (!Actor->GetFName().ToString().Contains(TrimmedActorFilter, ESearchCase::IgnoreCase))
+				{
+					continue;
+				}
+			}
+
+			TArray<UPrimitiveComponent*> Prims;
+			Actor->GetComponents<UPrimitiveComponent>(Prims);
+			for (UPrimitiveComponent* Comp : Prims)
+			{
+				if (!Comp) continue;
+
+				if (!TrimmedClassFilter.IsEmpty())
+				{
+					const FString CompClass = Comp->GetClass()->GetFName().ToString();
+					if (!CompClass.Contains(TrimmedClassFilter, ESearchCase::IgnoreCase))
+					{
+						continue;
+					}
+				}
+
+				const FString MeshPath = BridgePerfRender::GetMeshAssetPathForLod(Comp);
+				if (MeshPath.IsEmpty())
+				{
+					continue;
+				}
+				const int32 LodIdx = BridgePerfRender::ResolveComponentLodIndex(Comp);
+				if (LodIdx < 0)
+				{
+					continue;
+				}
+
+				FKey K(MeshPath, LodIdx);
+				FLodAcc& Bucket = Acc.FindOrAdd(K);
+				++Bucket.Count;
+				if (Bucket.Samples.Num() < 3)
+				{
+					Bucket.Samples.Add(Actor->GetPathName());
+				}
+			}
+		}
+	}
+
+	Out.Reserve(Acc.Num());
+	for (const TPair<FKey, FLodAcc>& Entry : Acc)
+	{
+		FBridgePerfBreakdownRow Row;
+		Row.Key = FString::Printf(TEXT("%s:LOD%d"), *Entry.Key.Key, Entry.Key.Value);
+		Row.Count = Entry.Value.Count;
+		Row.TotalBytes = 0;
+		Row.SamplePaths = Entry.Value.Samples;
+		Out.Add(MoveTemp(Row));
+	}
+
+	BridgePerfImpl::FinalizeBreakdownRows(Out, /*MaxGroups*/ 1000);
+	return Out;
 }

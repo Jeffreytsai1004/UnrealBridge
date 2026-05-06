@@ -314,6 +314,42 @@ struct FBridgePerfSnapshot
 };
 
 /**
+ * Per-actor render cost summary (M3-2). Returned by `GetActorRenderCost`
+ * and `GetShadowCasterBreakdown`. GameThread-only — reads cached
+ * UPrimitiveComponent properties; does not reflect culling state.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeActorRenderCost
+{
+	GENERATED_BODY()
+
+	/** Actor path (e.g. "/Game/Maps/Forest.Forest:PersistentLevel.SM_Tree_42"). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString ActorPath;
+
+	/** Number of UPrimitiveComponents on the actor (visible or hidden). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 PrimitiveComponentCount = 0;
+
+	/** Sum of `GetNumMaterials()` across primitive components. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 MaterialSlotCount = 0;
+
+	/** Sum of LOD0 triangle counts across static + skeletal mesh components.
+	 *  Returns 0 for primitive types we don't recognize (particle systems, etc.). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 EstimatedTriangleCount = 0;
+
+	/** True when ANY primitive component on the actor has bCastDynamicShadow=true. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bCastsDynamicShadow = false;
+
+	/** Distinct material asset paths referenced across all primitives. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	TArray<FString> Materials;
+};
+
+/**
  * Structured performance snapshots for UnrealBridge. Replaces parsing
  * `stat unit` text output. All values are read from engine globals + platform
  * APIs on the GameThread.
@@ -609,4 +645,58 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
 	static bool ExportPerfSamplesToCsv(const FString& OutputPath);
+
+	// ─── M3: render breakdown ──────────────────────────────────
+
+	/**
+	 * Per-actor render cost summary. Resolves `ActorPath` via
+	 * `FindObject<AActor>` against the editor world (must be a fully
+	 * qualified path like "/Game/Maps/Forest.Forest:PersistentLevel.SM_Tree_42").
+	 *
+	 * Returns an empty struct (ActorPath="" indicating not-found) when the
+	 * actor cannot be resolved. Otherwise iterates UPrimitiveComponents on
+	 * the actor and aggregates:
+	 *   - PrimitiveComponentCount: total primitive components
+	 *   - MaterialSlotCount: sum of GetNumMaterials() per primitive
+	 *   - EstimatedTriangleCount: sum of LOD0 triangles for static / skel
+	 *     mesh components (other primitive types contribute 0)
+	 *   - bCastsDynamicShadow: OR of bCastDynamicShadow across primitives
+	 *   - Materials: distinct material asset paths referenced
+	 *
+	 * GameThread-only; no RT sync. Cost is O(num_components_on_actor).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static FBridgeActorRenderCost GetActorRenderCost(const FString& ActorPath);
+
+	/**
+	 * Aggregate static + skeletal mesh components in the editor world by
+	 * `<asset_path>:LOD<n>`, returning a breakdown row per (mesh, lod) pair.
+	 *
+	 * The "current LOD" used here is the component's
+	 * `GetForcedLODRequested()` / equivalent best-effort accessor; when the
+	 * component has no forced LOD we fall back to LOD0. We intentionally do
+	 * NOT compute the screen-size-driven dynamic LOD because that requires
+	 * the rendered view (RT-side) and would introduce a sync. Callers who
+	 * need true per-frame LOD should use `stat lodgroup` or trace tools.
+	 *
+	 * Filters:
+	 *   - `ClassFilter`: substring matched against the component's class FName
+	 *     (case-insensitive). Typical values: "StaticMeshComponent",
+	 *     "SkeletalMeshComponent". Empty = both.
+	 *   - `ActorFilter`: substring matched against the owning actor's FName.
+	 *     Empty = all actors.
+	 *
+	 * Schema:
+	 *   - Key = "<mesh_asset_path>:LOD<n>"
+	 *   - Count = number of components reporting that (mesh, lod) pair
+	 *   - TotalBytes = 0 (LOD distribution is component-count, not size)
+	 *   - SamplePaths = up to 3 owning actor paths
+	 *   - LevelName = empty
+	 *
+	 * Rows sorted by Count descending, ties by Key. Returns at most 1000 rows.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static TArray<FBridgePerfBreakdownRow> GetLodDistribution(
+		const FString& ClassFilter,
+		const FString& ActorFilter);
 };
