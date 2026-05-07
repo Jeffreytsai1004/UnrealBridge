@@ -85,8 +85,16 @@
 #include "UObject/UObjectIterator.h"
 #include "K2Node_EnhancedInputAction.h"
 #include "K2Node_GetInputActionValue.h"
+#include "K2Node_InputAction.h"
+#include "K2Node_InputAxisEvent.h"
+#include "K2Node_InputKey.h"
+#include "K2Node_InputAxisKeyEvent.h"
+#include "K2Node_GetSubsystem.h"
+#include "EnhancedInputSubsystems.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -11488,7 +11496,8 @@ FBridgeWireIAResult UUnrealBridgeBlueprintLibrary::WireEnhancedInputActionToFunc
 	const FString& InputActionPath, const FString& TriggerEventPin,
 	const FString& TargetClassPath, const FString& TargetFunctionName,
 	int32 EventNodeX, int32 EventNodeY,
-	int32 CallNodeX,  int32 CallNodeY)
+	int32 CallNodeX,  int32 CallNodeY,
+	bool bAutoWireActionValue)
 {
 	FBridgeWireIAResult Out;
 
@@ -11580,7 +11589,233 @@ FBridgeWireIAResult UUnrealBridgeBlueprintLibrary::WireEnhancedInputActionToFunc
 		return Out;
 	}
 
+	// (4) Optional: auto-wire the event's ActionValue → first compatible
+	//     input data pin on the CallFunction. Compatible means same struct
+	//     subcategory object (Vector2D ↔ Vector2D), same primitive (bool ↔
+	//     bool, double ↔ double), or InputActionValue ↔ InputActionValue.
+	//     Schema->TryCreateConnection will reject incompatible types so a
+	//     conservative attempt is safe.
+	if (bAutoWireActionValue)
+	{
+		if (UEdGraphPin* ActionValuePin = EventNode->FindPin(TEXT("ActionValue"), EGPD_Output))
+		{
+			for (UEdGraphPin* CallPin : CallNode->Pins)
+			{
+				if (CallPin->Direction != EGPD_Input) continue;
+				if (CallPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec) continue;
+				if (CallPin->PinName == UEdGraphSchema_K2::PN_Self) continue;
+				// Try; the schema gates on type compat. Stop at the first that takes.
+				if (Schema->TryCreateConnection(ActionValuePin, CallPin))
+				{
+					break;
+				}
+			}
+		}
+	}
+
 	Out.bWired = true;
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
 	return Out;
+}
+
+// ─── B2/B3/B4/B5 Legacy K2Node factories ────────────────────────────
+
+namespace BridgeLegacyInputImpl
+{
+	template<typename TNode>
+	static TNode* PlaceNode(UEdGraph* Graph, int32 X, int32 Y)
+	{
+		TNode* N = NewObject<TNode>(Graph);
+		N->CreateNewGuid();
+		N->NodePosX = X;
+		N->NodePosY = Y;
+		Graph->AddNode(N, false, false);
+		N->PostPlacedNewNode();
+		return N;
+	}
+}
+
+FString UUnrealBridgeBlueprintLibrary::AddLegacyInputActionEventNode(
+	const FString& BlueprintPath, const FString& GraphName,
+	const FString& ActionName, int32 NodePosX, int32 NodePosY)
+{
+	UBlueprint* BP = LoadBP(BlueprintPath); if (!BP) return FString();
+	UEdGraph* Graph = BridgeBlueprintGraphWriteImpl::FindGraphByName(BP, GraphName);
+	if (!Graph || ActionName.IsEmpty()) return FString();
+	Graph->Modify(); BP->Modify();
+	UK2Node_InputAction* N = BridgeLegacyInputImpl::PlaceNode<UK2Node_InputAction>(Graph, NodePosX, NodePosY);
+	N->InputActionName = FName(*ActionName);
+	N->AllocateDefaultPins();
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+	return N->NodeGuid.ToString(EGuidFormats::Digits);
+}
+
+FString UUnrealBridgeBlueprintLibrary::AddLegacyInputAxisEventNode(
+	const FString& BlueprintPath, const FString& GraphName,
+	const FString& AxisName, int32 NodePosX, int32 NodePosY)
+{
+	UBlueprint* BP = LoadBP(BlueprintPath); if (!BP) return FString();
+	UEdGraph* Graph = BridgeBlueprintGraphWriteImpl::FindGraphByName(BP, GraphName);
+	if (!Graph || AxisName.IsEmpty()) return FString();
+	Graph->Modify(); BP->Modify();
+	UK2Node_InputAxisEvent* N = BridgeLegacyInputImpl::PlaceNode<UK2Node_InputAxisEvent>(Graph, NodePosX, NodePosY);
+	// UK2Node_InputAxisEvent::Initialize() sets InputAxisName + EventReference for K2Node_Event base.
+	N->Initialize(FName(*AxisName));
+	N->AllocateDefaultPins();
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+	return N->NodeGuid.ToString(EGuidFormats::Digits);
+}
+
+FString UUnrealBridgeBlueprintLibrary::AddInputKeyEventNode(
+	const FString& BlueprintPath, const FString& GraphName,
+	const FString& KeyName, int32 NodePosX, int32 NodePosY)
+{
+	UBlueprint* BP = LoadBP(BlueprintPath); if (!BP) return FString();
+	UEdGraph* Graph = BridgeBlueprintGraphWriteImpl::FindGraphByName(BP, GraphName);
+	if (!Graph) return FString();
+	FKey K(*KeyName);
+	if (!K.IsValid()) return FString();
+	Graph->Modify(); BP->Modify();
+	UK2Node_InputKey* N = BridgeLegacyInputImpl::PlaceNode<UK2Node_InputKey>(Graph, NodePosX, NodePosY);
+	N->InputKey = K;
+	N->AllocateDefaultPins();
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+	return N->NodeGuid.ToString(EGuidFormats::Digits);
+}
+
+FString UUnrealBridgeBlueprintLibrary::AddInputAxisKeyEventNode(
+	const FString& BlueprintPath, const FString& GraphName,
+	const FString& AxisKeyName, int32 NodePosX, int32 NodePosY)
+{
+	UBlueprint* BP = LoadBP(BlueprintPath); if (!BP) return FString();
+	UEdGraph* Graph = BridgeBlueprintGraphWriteImpl::FindGraphByName(BP, GraphName);
+	if (!Graph) return FString();
+	FKey K(*AxisKeyName);
+	if (!K.IsValid() || !K.IsAxis1D()) return FString();
+	Graph->Modify(); BP->Modify();
+	UK2Node_InputAxisKeyEvent* N = BridgeLegacyInputImpl::PlaceNode<UK2Node_InputAxisKeyEvent>(Graph, NodePosX, NodePosY);
+	N->AxisKey = K;
+	N->AllocateDefaultPins();
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+	return N->NodeGuid.ToString(EGuidFormats::Digits);
+}
+
+// ─── C4 BeginPlay → AddMappingContext graph ─────────────────────────
+
+bool UUnrealBridgeBlueprintLibrary::AddPawnInputBeginPlaySetup(
+	const FString& BlueprintPath, const FString& IMCPath, int32 Priority,
+	int32 OriginX, int32 OriginY)
+{
+	UBlueprint* BP = LoadBP(BlueprintPath); if (!BP) return false;
+	UEdGraph* Graph = BridgeBlueprintGraphWriteImpl::FindGraphByName(BP, TEXT("EventGraph"));
+	if (!Graph) return false;
+	UInputMappingContext* IMC = LoadObject<UInputMappingContext>(nullptr, *IMCPath);
+	if (!IMC) return false;
+
+	// Resolve all UFUNCTIONs we need up front.
+	UFunction* GetPCFn = UGameplayStatics::StaticClass()->FindFunctionByName(TEXT("GetPlayerController"));
+	if (!GetPCFn) return false;
+	UFunction* AddMCFn = UEnhancedInputLocalPlayerSubsystem::StaticClass()->FindFunctionByName(TEXT("AddMappingContext"));
+	if (!AddMCFn) return false;
+
+	Graph->Modify(); BP->Modify();
+	const UEdGraphSchema* Schema = Graph->GetSchema();
+	if (!Schema) return false;
+
+	// (1) Reuse-or-add Event ReceiveBeginPlay.
+	UClass* ParentClass = (UClass*)(BP->ParentClass);
+	UFunction* BeginPlayFn = ParentClass ? ParentClass->FindFunctionByName(TEXT("ReceiveBeginPlay")) : nullptr;
+	if (!BeginPlayFn) return false;
+	UK2Node_Event* BeginPlayNode = nullptr;
+	for (UEdGraphNode* N : Graph->Nodes)
+	{
+		if (UK2Node_Event* Ev = Cast<UK2Node_Event>(N))
+		{
+			if (Ev->EventReference.GetMemberName() == TEXT("ReceiveBeginPlay"))
+			{
+				BeginPlayNode = Ev; break;
+			}
+		}
+	}
+	if (!BeginPlayNode)
+	{
+		BeginPlayNode = NewObject<UK2Node_Event>(Graph);
+		BeginPlayNode->CreateNewGuid();
+		BeginPlayNode->EventReference.SetExternalMember(TEXT("ReceiveBeginPlay"), ParentClass);
+		BeginPlayNode->bOverrideFunction = true;
+		BeginPlayNode->NodePosX = OriginX;
+		BeginPlayNode->NodePosY = OriginY;
+		Graph->AddNode(BeginPlayNode, false, false);
+		BeginPlayNode->PostPlacedNewNode();
+		BeginPlayNode->AllocateDefaultPins();
+	}
+	else
+	{
+		BeginPlayNode->Modify();
+		BeginPlayNode->bOverrideFunction = true;
+	}
+
+	// (2) GetPlayerController(Self, 0)
+	UK2Node_CallFunction* GetPCNode = NewObject<UK2Node_CallFunction>(Graph);
+	GetPCNode->CreateNewGuid();
+	GetPCNode->SetFromFunction(GetPCFn);
+	GetPCNode->NodePosX = OriginX + 320; GetPCNode->NodePosY = OriginY + 130;
+	Graph->AddNode(GetPCNode, false, false);
+	GetPCNode->PostPlacedNewNode();
+	GetPCNode->AllocateDefaultPins();
+	if (UEdGraphPin* IndexPin = GetPCNode->FindPin(TEXT("PlayerIndex"), EGPD_Input))
+	{
+		Schema->TrySetDefaultValue(*IndexPin, TEXT("0"));
+	}
+
+	// (3) GetSubsystemFromPC<UEnhancedInputLocalPlayerSubsystem>
+	UK2Node_GetSubsystemFromPC* GetSubNode = NewObject<UK2Node_GetSubsystemFromPC>(Graph);
+	GetSubNode->Initialize(UEnhancedInputLocalPlayerSubsystem::StaticClass());
+	GetSubNode->CreateNewGuid();
+	GetSubNode->NodePosX = OriginX + 640; GetSubNode->NodePosY = OriginY + 130;
+	Graph->AddNode(GetSubNode, false, false);
+	GetSubNode->PostPlacedNewNode();
+	GetSubNode->AllocateDefaultPins();
+
+	// (4) AddMappingContext(IMC, Priority)
+	UK2Node_CallFunction* AddMCNode = NewObject<UK2Node_CallFunction>(Graph);
+	AddMCNode->CreateNewGuid();
+	AddMCNode->SetFromFunction(AddMCFn);
+	AddMCNode->NodePosX = OriginX + 960; AddMCNode->NodePosY = OriginY;
+	Graph->AddNode(AddMCNode, false, false);
+	AddMCNode->PostPlacedNewNode();
+	AddMCNode->AllocateDefaultPins();
+	if (UEdGraphPin* MCPin = AddMCNode->FindPin(TEXT("MappingContext"), EGPD_Input))
+	{
+		// For object/asset pins, set DefaultObject only — leave DefaultValue
+		// empty. The K2 schema treats DefaultValue on object pins as a
+		// fallback string parse and rejects "IMC_Sandbox" because that's
+		// not a valid asset path; symptom is a compile error
+		// 'String NewDefaultValue 'X' specified on object pin'.
+		MCPin->DefaultObject = IMC;
+		MCPin->DefaultValue = FString();
+	}
+	if (UEdGraphPin* PrioPin = AddMCNode->FindPin(TEXT("Priority"), EGPD_Input))
+	{
+		Schema->TrySetDefaultValue(*PrioPin, FString::FromInt(Priority));
+	}
+
+	// Wires:
+	//   BeginPlay.then -> AddMC.exec_in
+	//   GetPC.return  -> GetSub.PlayerController
+	//   GetSub.return -> AddMC.self
+	UEdGraphPin* BeginThen = BeginPlayNode->FindPin(UEdGraphSchema_K2::PN_Then, EGPD_Output);
+	UEdGraphPin* AddMCExec = AddMCNode->FindPin(UEdGraphSchema_K2::PN_Execute, EGPD_Input);
+	UEdGraphPin* GetPCRet = GetPCNode->FindPin(UEdGraphSchema_K2::PN_ReturnValue, EGPD_Output);
+	UEdGraphPin* GetSubPCIn = GetSubNode->FindPin(TEXT("PlayerController"), EGPD_Input);
+	UEdGraphPin* GetSubRet = GetSubNode->FindPin(UEdGraphSchema_K2::PN_ReturnValue, EGPD_Output);
+	UEdGraphPin* AddMCSelf = AddMCNode->FindPin(UEdGraphSchema_K2::PN_Self, EGPD_Input);
+
+	bool bAllOk = true;
+	if (BeginThen && AddMCExec) bAllOk &= Schema->TryCreateConnection(BeginThen, AddMCExec);
+	if (GetPCRet && GetSubPCIn) bAllOk &= Schema->TryCreateConnection(GetPCRet, GetSubPCIn);
+	if (GetSubRet && AddMCSelf) bAllOk &= Schema->TryCreateConnection(GetSubRet, AddMCSelf);
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+	return bAllOk;
 }
