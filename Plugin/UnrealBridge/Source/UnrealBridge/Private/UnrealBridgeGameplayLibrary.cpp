@@ -28,6 +28,9 @@
 #include "NavigationSystem.h"
 #include "NavigationPath.h"
 #include "InputAction.h"
+#include "Misc/PackageName.h"
+#include "UObject/Package.h"
+#include "FileHelpers.h"
 #include "Framework/Application/SlateApplication.h"
 #include "InputCoreTypes.h"
 #include "InputActionValue.h"
@@ -2246,4 +2249,127 @@ bool UUnrealBridgeGameplayLibrary::RemoveIAMappingFromIMC(
 	}
 	IMC->MarkPackageDirty();
 	return true;
+}
+
+// ─── Asset creation: IA / IMC (A1, A2) ──────────────────────────────
+
+namespace BridgeInputAuthoringImpl
+{
+	/** Map "Boolean"/"Bool" → Boolean; "Axis1D" → Axis1D; case-insensitive. */
+	static EInputActionValueType ParseValueType(const FString& Raw)
+	{
+		const FString N = Raw.TrimStartAndEnd().ToLower();
+		if (N == TEXT("axis1d") || N == TEXT("float") || N == TEXT("1d")) return EInputActionValueType::Axis1D;
+		if (N == TEXT("axis2d") || N == TEXT("vector2d") || N == TEXT("2d")) return EInputActionValueType::Axis2D;
+		if (N == TEXT("axis3d") || N == TEXT("vector") || N == TEXT("3d")) return EInputActionValueType::Axis3D;
+		// "boolean" / "bool" / anything unrecognised
+		return EInputActionValueType::Boolean;
+	}
+
+	/**
+	 * Split "/Game/Foo/MyAsset" into ("/Game/Foo/MyAsset", "MyAsset"). Validates
+	 * that the path starts with "/" (a mount-rooted package path). Returns false
+	 * if the path is malformed (no leading slash, trailing slash, or empty name).
+	 */
+	static bool SplitPackagePath(const FString& InPath, FString& OutPackageName, FString& OutAssetName)
+	{
+		if (InPath.IsEmpty() || !InPath.StartsWith(TEXT("/")) || InPath.EndsWith(TEXT("/")))
+		{
+			return false;
+		}
+		// Strip any ".AssetName" suffix the caller may have included.
+		FString Stripped = InPath;
+		int32 DotIdx;
+		if (Stripped.FindChar(TCHAR('.'), DotIdx))
+		{
+			Stripped.LeftInline(DotIdx);
+		}
+		int32 SlashIdx;
+		if (!Stripped.FindLastChar(TCHAR('/'), SlashIdx))
+		{
+			return false;
+		}
+		OutAssetName = Stripped.Mid(SlashIdx + 1);
+		if (OutAssetName.IsEmpty()) return false;
+		OutPackageName = Stripped;
+		return true;
+	}
+
+	/** Create a new asset of UClass at PackagePath. Returns nullptr on failure. */
+	template <typename TAsset>
+	static TAsset* CreateInputAsset(const FString& PackagePath, FString& OutObjectPath)
+	{
+		FString PackageName, AssetName;
+		if (!SplitPackagePath(PackagePath, PackageName, AssetName))
+		{
+			UE_LOG(LogUnrealBridgeAgent, Warning,
+				TEXT("CreateInputAsset: malformed package path '%s'"), *PackagePath);
+			return nullptr;
+		}
+
+		if (FPackageName::DoesPackageExist(PackageName))
+		{
+			UE_LOG(LogUnrealBridgeAgent, Warning,
+				TEXT("CreateInputAsset: package already exists at '%s'"), *PackageName);
+			return nullptr;
+		}
+
+		UPackage* Package = CreatePackage(*PackageName);
+		if (!Package)
+		{
+			UE_LOG(LogUnrealBridgeAgent, Warning,
+				TEXT("CreateInputAsset: CreatePackage failed for '%s'"), *PackageName);
+			return nullptr;
+		}
+
+		TAsset* Asset = NewObject<TAsset>(
+			Package, FName(*AssetName), RF_Public | RF_Standalone | RF_Transactional);
+		if (!Asset) return nullptr;
+
+		FAssetRegistryModule::AssetCreated(Asset);
+		Asset->MarkPackageDirty();
+
+		OutObjectPath = PackageName + TEXT(".") + AssetName;
+		return Asset;
+	}
+}
+
+FString UUnrealBridgeGameplayLibrary::CreateInputAction(
+	const FString& PackagePath, const FString& ValueType,
+	const FString& Description, bool bSave)
+{
+	FString ObjectPath;
+	UInputAction* IA = BridgeInputAuthoringImpl::CreateInputAsset<UInputAction>(PackagePath, ObjectPath);
+	if (!IA) return FString();
+
+	IA->ValueType = BridgeInputAuthoringImpl::ParseValueType(ValueType);
+	if (!Description.IsEmpty())
+	{
+		IA->ActionDescription = FText::FromString(Description);
+	}
+
+	if (bSave)
+	{
+		UEditorLoadingAndSavingUtils::SavePackages({ IA->GetOutermost() }, /*bOnlyDirty*/ false);
+	}
+	return ObjectPath;
+}
+
+FString UUnrealBridgeGameplayLibrary::CreateInputMappingContext(
+	const FString& PackagePath, const FString& Description, bool bSave)
+{
+	FString ObjectPath;
+	UInputMappingContext* IMC = BridgeInputAuthoringImpl::CreateInputAsset<UInputMappingContext>(PackagePath, ObjectPath);
+	if (!IMC) return FString();
+
+	if (!Description.IsEmpty())
+	{
+		IMC->ContextDescription = FText::FromString(Description);
+	}
+
+	if (bSave)
+	{
+		UEditorLoadingAndSavingUtils::SavePackages({ IMC->GetOutermost() }, /*bOnlyDirty*/ false);
+	}
+	return ObjectPath;
 }

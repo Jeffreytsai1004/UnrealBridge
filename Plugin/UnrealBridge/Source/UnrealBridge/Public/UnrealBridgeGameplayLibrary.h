@@ -863,6 +863,34 @@ public:
 	static TArray<FString> ListInputMappingContexts(const FString& ContentPathFilter, int32 MaxResults = 0);
 
 	/**
+	 * Create a new UInputAction asset at PackagePath. Returns the full asset
+	 * path on success, empty string on failure (path already exists, parent
+	 * folder invalid, save failed, ...).
+	 *
+	 * @param PackagePath  Content path WITHOUT extension, e.g. "/Game/Input/IA_Sprint".
+	 * @param ValueType    "Boolean" / "Axis1D" / "Axis2D" / "Axis3D" — case-insensitive.
+	 *                     Defaults to "Boolean" if unrecognized.
+	 * @param Description  Optional. Goes into the IA's `ActionDescription` field.
+	 * @param bSave        Save the asset to disk after creation. Default true.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static FString CreateInputAction(const FString& PackagePath, const FString& ValueType,
+		const FString& Description = TEXT(""), bool bSave = true);
+
+	/**
+	 * Create a new UInputMappingContext asset at PackagePath. Returns the full
+	 * asset path on success, empty string on failure.
+	 *
+	 * @param PackagePath  Content path WITHOUT extension, e.g. "/Game/Input/IMC_Player".
+	 * @param Description  Optional. Goes into the IMC's `ContextDescription` field
+	 *                     (5.4+; ignored on older versions where the field is absent).
+	 * @param bSave        Save the asset to disk after creation. Default true.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static FString CreateInputMappingContext(const FString& PackagePath,
+		const FString& Description = TEXT(""), bool bSave = true);
+
+	/**
 	 * Enumerate the IA→Key mappings (with per-mapping Trigger / Modifier
 	 * classes) on a UInputMappingContext asset. Reads via the public
 	 * GetMappings() accessor, which returns DefaultKeyMappings.Mappings on
