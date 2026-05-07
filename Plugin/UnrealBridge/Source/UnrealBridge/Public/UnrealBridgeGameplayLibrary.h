@@ -891,6 +891,55 @@ public:
 		const FString& Description = TEXT(""), bool bSave = true);
 
 	/**
+	 * Append a UInputTrigger instance to IA->Triggers. The new instance has
+	 * its UPROPERTY values populated from `ParamsJson` (a JSON object whose
+	 * keys are property names; e.g. {"HoldTimeThreshold": 0.5} for Hold).
+	 *
+	 * @param InputActionPath  e.g. "/Game/Input/IA_Sprint.IA_Sprint".
+	 * @param TriggerClass     Short name ("Hold", "Pressed", "Tap", "Pulse",
+	 *                         "Released", "HoldAndRelease", "Down", "Combo",
+	 *                         "ChordAction", "ChordBlocker", "RepeatedTap"),
+	 *                         long name ("InputTriggerHold"), or full class
+	 *                         path ("/Script/EnhancedInput.InputTriggerHold").
+	 * @param ParamsJson       JSON object of {property_name: value}. Empty
+	 *                         "{}" means use defaults.
+	 * @param bSave            Save the IA package after editing. Default true.
+	 * @return Index of the new entry in Triggers[], or -1 on failure.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static int32 AddTriggerToIA(const FString& InputActionPath,
+		const FString& TriggerClass, const FString& ParamsJson = TEXT("{}"),
+		bool bSave = true);
+
+	/**
+	 * Append a UInputModifier instance to IA->Modifiers, with UPROPERTY values
+	 * populated from `ParamsJson`.
+	 *
+	 * @param ModifierClass  Short name ("Negate", "Scalar", "DeadZone",
+	 *                       "Smooth", "SwizzleAxis", "ToWorldSpace",
+	 *                       "ScaleByDeltaTime", "FOVScaling",
+	 *                       "ResponseCurveExponential", "ResponseCurveUser",
+	 *                       "SmoothDelta"), long name ("InputModifierNegate"),
+	 *                       or full class path.
+	 * @return Index of the new entry in Modifiers[], or -1 on failure.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static int32 AddModifierToIA(const FString& InputActionPath,
+		const FString& ModifierClass, const FString& ParamsJson = TEXT("{}"),
+		bool bSave = true);
+
+	/**
+	 * Remove the entry at `Index` from IA->Triggers. Use a negative index to
+	 * mean "from end" (Python-style: -1 = last). Returns true on success.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static bool RemoveTriggerFromIA(const FString& InputActionPath, int32 Index, bool bSave = true);
+
+	/** Symmetric remover for IA->Modifiers. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static bool RemoveModifierFromIA(const FString& InputActionPath, int32 Index, bool bSave = true);
+
+	/**
 	 * Enumerate the IA→Key mappings (with per-mapping Trigger / Modifier
 	 * classes) on a UInputMappingContext asset. Reads via the public
 	 * GetMappings() accessor, which returns DefaultKeyMappings.Mappings on

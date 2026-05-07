@@ -31,6 +31,9 @@
 #include "Misc/PackageName.h"
 #include "UObject/Package.h"
 #include "FileHelpers.h"
+#include "JsonObjectConverter.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "Framework/Application/SlateApplication.h"
 #include "InputCoreTypes.h"
 #include "InputActionValue.h"
@@ -2372,4 +2375,213 @@ FString UUnrealBridgeGameplayLibrary::CreateInputMappingContext(
 		UEditorLoadingAndSavingUtils::SavePackages({ IMC->GetOutermost() }, /*bOnlyDirty*/ false);
 	}
 	return ObjectPath;
+}
+
+// ─── Trigger / Modifier instance editing on IA (A4, A6) ─────────────
+
+namespace BridgeInputAuthoringImpl
+{
+	/**
+	 * Resolve a user-supplied class string to a UClass derived from BaseClass.
+	 *
+	 *   "Hold"                  → BaseClass-prefixed name (e.g. UInputTriggerHold)
+	 *   "InputTriggerHold"      → resolved by short name
+	 *   "/Script/EnhancedInput.InputTriggerHold"  → full path
+	 */
+	static UClass* ResolveSubclass(UClass* BaseClass, const FString& Raw)
+	{
+		const FString Trim = Raw.TrimStartAndEnd();
+		if (Trim.IsEmpty() || !BaseClass) return nullptr;
+
+		// Path form
+		if (Trim.StartsWith(TEXT("/")))
+		{
+			return LoadObject<UClass>(nullptr, *Trim);
+		}
+
+		// Try short name as-is first
+		if (UClass* Direct = FindFirstObject<UClass>(*Trim, EFindFirstObjectOptions::None))
+		{
+			if (Direct->IsChildOf(BaseClass)) return Direct;
+		}
+
+		// Try with the base class's prefix-stripped name e.g. "UInputTrigger" → "Hold" → "UInputTriggerHold"
+		const FString BaseShort = BaseClass->GetName(); // e.g. "InputTrigger" / "InputModifier"
+		const FString Prefixed = BaseShort + Trim;
+		if (UClass* WithPrefix = FindFirstObject<UClass>(*Prefixed, EFindFirstObjectOptions::None))
+		{
+			if (WithPrefix->IsChildOf(BaseClass)) return WithPrefix;
+		}
+
+		return nullptr;
+	}
+
+	/** Parse JSON object → assign each key as a UPROPERTY on Target. Returns true on success. */
+	static bool ApplyJsonParamsToObject(UObject* Target, const FString& Json)
+	{
+		if (!Target || Json.IsEmpty() || Json == TEXT("{}")) return true;
+
+		TSharedPtr<FJsonObject> Root;
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Json);
+		if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+		{
+			UE_LOG(LogUnrealBridgeAgent, Warning,
+				TEXT("ApplyJsonParamsToObject: malformed JSON: %s"), *Json);
+			return false;
+		}
+
+		// Use FJsonObjectConverter to map JSON keys onto properties of this UObject.
+		// Mirrors how UE imports default property values. CheckFlags=0 means no
+		// property-flag filter; the relevant subset are EditAnywhere / Config /
+		// public on the trigger/modifier classes.
+		const bool bOk = FJsonObjectConverter::JsonObjectToUStruct(
+			Root.ToSharedRef(), Target->GetClass(), Target,
+			/*CheckFlags*/ 0, /*SkipFlags*/ 0);
+		if (!bOk)
+		{
+			UE_LOG(LogUnrealBridgeAgent, Warning,
+				TEXT("ApplyJsonParamsToObject: JsonObjectToUStruct returned false on %s"),
+				*Target->GetClass()->GetName());
+		}
+		return bOk;
+	}
+
+	/** Resolve a possibly-negative index against array length. -1 = last. */
+	static int32 NormalizeIndex(int32 Idx, int32 Len)
+	{
+		if (Idx < 0) Idx += Len;
+		return (Idx >= 0 && Idx < Len) ? Idx : INDEX_NONE;
+	}
+}
+
+int32 UUnrealBridgeGameplayLibrary::AddTriggerToIA(
+	const FString& InputActionPath, const FString& TriggerClass,
+	const FString& ParamsJson, bool bSave)
+{
+	UInputAction* IA = LoadObject<UInputAction>(nullptr, *InputActionPath);
+	if (!IA)
+	{
+		UE_LOG(LogUnrealBridgeAgent, Warning,
+			TEXT("AddTriggerToIA: failed to load IA '%s'"), *InputActionPath);
+		return -1;
+	}
+
+	UClass* Cls = BridgeInputAuthoringImpl::ResolveSubclass(UInputTrigger::StaticClass(), TriggerClass);
+	if (!Cls || Cls->HasAnyClassFlags(CLASS_Abstract))
+	{
+		UE_LOG(LogUnrealBridgeAgent, Warning,
+			TEXT("AddTriggerToIA: '%s' is not a concrete UInputTrigger subclass"), *TriggerClass);
+		return -1;
+	}
+
+	UInputTrigger* Instance = NewObject<UInputTrigger>(IA, Cls, NAME_None, RF_Transactional);
+	if (!Instance) return -1;
+
+	if (!BridgeInputAuthoringImpl::ApplyJsonParamsToObject(Instance, ParamsJson))
+	{
+		// JSON failure is non-fatal — keep the instance with whatever properties
+		// did stick. Caller already got a warning in the log.
+	}
+
+	IA->Modify();
+	const int32 NewIdx = IA->Triggers.Add(Instance);
+
+	FPropertyChangedEvent Evt(
+		FindFProperty<FProperty>(IA->GetClass(), GET_MEMBER_NAME_CHECKED(UInputAction, Triggers)),
+		EPropertyChangeType::ArrayAdd);
+	IA->PostEditChangeProperty(Evt);
+	IA->MarkPackageDirty();
+
+	if (bSave)
+	{
+		UEditorLoadingAndSavingUtils::SavePackages({ IA->GetOutermost() }, /*bOnlyDirty*/ false);
+	}
+	return NewIdx;
+}
+
+int32 UUnrealBridgeGameplayLibrary::AddModifierToIA(
+	const FString& InputActionPath, const FString& ModifierClass,
+	const FString& ParamsJson, bool bSave)
+{
+	UInputAction* IA = LoadObject<UInputAction>(nullptr, *InputActionPath);
+	if (!IA)
+	{
+		UE_LOG(LogUnrealBridgeAgent, Warning,
+			TEXT("AddModifierToIA: failed to load IA '%s'"), *InputActionPath);
+		return -1;
+	}
+
+	UClass* Cls = BridgeInputAuthoringImpl::ResolveSubclass(UInputModifier::StaticClass(), ModifierClass);
+	if (!Cls || Cls->HasAnyClassFlags(CLASS_Abstract))
+	{
+		UE_LOG(LogUnrealBridgeAgent, Warning,
+			TEXT("AddModifierToIA: '%s' is not a concrete UInputModifier subclass"), *ModifierClass);
+		return -1;
+	}
+
+	UInputModifier* Instance = NewObject<UInputModifier>(IA, Cls, NAME_None, RF_Transactional);
+	if (!Instance) return -1;
+
+	BridgeInputAuthoringImpl::ApplyJsonParamsToObject(Instance, ParamsJson);
+
+	IA->Modify();
+	const int32 NewIdx = IA->Modifiers.Add(Instance);
+
+	FPropertyChangedEvent Evt(
+		FindFProperty<FProperty>(IA->GetClass(), GET_MEMBER_NAME_CHECKED(UInputAction, Modifiers)),
+		EPropertyChangeType::ArrayAdd);
+	IA->PostEditChangeProperty(Evt);
+	IA->MarkPackageDirty();
+
+	if (bSave)
+	{
+		UEditorLoadingAndSavingUtils::SavePackages({ IA->GetOutermost() }, /*bOnlyDirty*/ false);
+	}
+	return NewIdx;
+}
+
+bool UUnrealBridgeGameplayLibrary::RemoveTriggerFromIA(
+	const FString& InputActionPath, int32 Index, bool bSave)
+{
+	UInputAction* IA = LoadObject<UInputAction>(nullptr, *InputActionPath);
+	if (!IA) return false;
+	const int32 Norm = BridgeInputAuthoringImpl::NormalizeIndex(Index, IA->Triggers.Num());
+	if (Norm == INDEX_NONE) return false;
+
+	IA->Modify();
+	IA->Triggers.RemoveAt(Norm);
+	FPropertyChangedEvent Evt(
+		FindFProperty<FProperty>(IA->GetClass(), GET_MEMBER_NAME_CHECKED(UInputAction, Triggers)),
+		EPropertyChangeType::ArrayRemove);
+	IA->PostEditChangeProperty(Evt);
+	IA->MarkPackageDirty();
+
+	if (bSave)
+	{
+		UEditorLoadingAndSavingUtils::SavePackages({ IA->GetOutermost() }, /*bOnlyDirty*/ false);
+	}
+	return true;
+}
+
+bool UUnrealBridgeGameplayLibrary::RemoveModifierFromIA(
+	const FString& InputActionPath, int32 Index, bool bSave)
+{
+	UInputAction* IA = LoadObject<UInputAction>(nullptr, *InputActionPath);
+	if (!IA) return false;
+	const int32 Norm = BridgeInputAuthoringImpl::NormalizeIndex(Index, IA->Modifiers.Num());
+	if (Norm == INDEX_NONE) return false;
+
+	IA->Modify();
+	IA->Modifiers.RemoveAt(Norm);
+	FPropertyChangedEvent Evt(
+		FindFProperty<FProperty>(IA->GetClass(), GET_MEMBER_NAME_CHECKED(UInputAction, Modifiers)),
+		EPropertyChangeType::ArrayRemove);
+	IA->PostEditChangeProperty(Evt);
+	IA->MarkPackageDirty();
+
+	if (bSave)
+	{
+		UEditorLoadingAndSavingUtils::SavePackages({ IA->GetOutermost() }, /*bOnlyDirty*/ false);
+	}
+	return true;
 }
