@@ -147,6 +147,97 @@ def set_actor_transform(actor_label, location=None, rotation=None, scale=None):
     return False
 
 
+def scaffold_enhanced_input_pawn(bp_path, ia_action_map, parent_class=None,
+                                 imc_path=None, save=True):
+    """Scaffold a Pawn-derived Blueprint with Enhanced Input bindings.
+
+    For each entry in `ia_action_map`, ensures a function graph exists and
+    wires the IA's chosen trigger event to a CallFunction node for that
+    function — i.e. the BP equivalent of `BindAction(IA, Triggered, this,
+    &Pawn::Move)` in C++. Caller is responsible for filling in the actual
+    function bodies afterwards.
+
+    Args:
+        bp_path: Content path of the Pawn BP, e.g. "/Game/MyPawn/BP_Hero".
+                 Created (as `parent_class` or APawn) if missing.
+        ia_action_map: Dict {ia_path: (trigger_event, function_name)}.
+                       trigger_event ∈ {"Triggered", "Started", "Ongoing",
+                       "Canceled", "Completed"}.
+        parent_class: UClass for newly-created BPs (default unreal.Pawn).
+        imc_path: Optional. Recorded in the result dict; IMC application
+                  is currently the caller's responsibility (use
+                  AddMappingContext at runtime, or set
+                  DefaultPawnInputMappingContext on the PlayerController).
+                  A future revision may generate the BeginPlay graph that
+                  pushes the IMC onto the local-player subsystem.
+        save: Save the BP package after authoring. Default True.
+
+    Returns:
+        Dict { "blueprint": <path>,
+               "imc": <path or None>,
+               "wired": [{"ia": str, "function": str, "wired": bool,
+                          "reason": str, "event_node": guid, "call_node": guid}] }
+
+    Example:
+        scaffold_enhanced_input_pawn(
+            "/Game/Pawns/BP_Hero",
+            {
+                "/Game/Input/IA_Move.IA_Move": ("Triggered", "HandleMove"),
+                "/Game/Input/IA_Jump.IA_Jump": ("Started",   "HandleJump"),
+            })
+    """
+    bp_lib    = unreal.UnrealBridgeBlueprintLibrary
+    bp_ed     = unreal.BlueprintEditorLibrary
+    asset_lib = unreal.EditorAssetLibrary
+
+    # 1. Ensure BP exists.
+    if not asset_lib.does_asset_exist(bp_path):
+        slash = bp_path.rfind("/")
+        folder, name = bp_path[:slash], bp_path[slash + 1:]
+        factory = unreal.BlueprintFactory()
+        factory.set_editor_property("parent_class", parent_class or unreal.Pawn)
+        unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            name, folder, unreal.Blueprint, factory)
+        asset_lib.save_asset(bp_path)
+
+    bp = unreal.load_asset(bp_path)
+    if not bp:
+        raise RuntimeError(f"failed to load Blueprint at {bp_path}")
+
+    # 2. Pre-create any missing target function graphs, then compile so they're
+    #    real on the GeneratedClass before we add CallFunction nodes for them.
+    #    Bridge.get_blueprint_functions is the read API; FunctionGraphs UPROPERTY
+    #    is protected and not directly Python-accessible.
+    existing = {f.get_editor_property("name")
+                for f in bp_lib.get_blueprint_functions(bp_path)}
+    for _, (_, fn_name) in ia_action_map.items():
+        if fn_name not in existing:
+            bp_ed.add_function_graph(bp, fn_name)
+            existing.add(fn_name)
+    bp_ed.compile_blueprint(bp)
+
+    # 3. Wire each IA → function.
+    results = []
+    y = 100
+    for ia_path, (trigger_event, fn_name) in ia_action_map.items():
+        r = bp_lib.wire_enhanced_input_action_to_function(
+            bp_path, "EventGraph", ia_path, trigger_event,
+            "", fn_name,
+            300, y, 700, y)
+        results.append({
+            "ia": ia_path, "function": fn_name,
+            "wired": r.wired, "reason": r.failure_reason,
+            "event_node": r.event_node_guid, "call_node": r.call_node_guid,
+        })
+        y += 250
+
+    bp_ed.compile_blueprint(bp)
+    if save:
+        asset_lib.save_asset(bp_path)
+
+    return {"blueprint": bp_path, "imc": imc_path, "wired": results}
+
+
 def get_world_info():
     """Get information about the current world/level.
 
