@@ -134,25 +134,37 @@ P0（解锁"agent 能从零写一个可玩 Pawn"这条主线 —— 直接对应
 | 5 | ~~**A4 AddTriggerToIA / A6 AddModifierToIA**~~（+ A5 对称 Remove） | ✅ commit `4579578` | `add_trigger_to_ia(ia, "Hold"/long-name/full-path, json, save) → idx`，JSON 走 `FJsonObjectConverter::JsonObjectToUStruct` 写 UPROPERTY；同样的 `add_modifier_to_ia`；附 `remove_*_from_ia(ia, idx)` 支持负数下标。 |
 | 6 | ~~**C4 ScaffoldEnhancedInputPawn**~~ | ✅ commit `a68c8b3` | Python 辅助 `unreal_bridge_helpers.scaffold_enhanced_input_pawn(bp, ia_action_map, parent_class)`：建 BP（如缺）+ 建 target function graphs + 对每条 (ia → trigger, fn) 调 B7。一次 Python 调用出可编译 Pawn。IMC 应用先留给 caller（runtime AddMappingContext 或 PlayerController 的 DefaultPawnInputMappingContext 字段；BeginPlay graph 自动生成是 P1 follow-up）。 |
 
-P1（补完调试与维护链路）：
+P1（补完调试与维护链路）：**全部交付 2026-05-07。**
 
-| 排名 | 项 | 估时 | 理由 |
-|---|---|---|---|
-| 7 | **D1 FindIAReferences + C1 FindBindActionCallSites + C2 FindEnhancedInputEventNodes** | 小-中 | "哪儿用到了这个 IA" 类问题 100% 频次，删/改 IA 前必跑 |
-| 8 | **A7/A8 per-mapping Trigger/Modifier in IMC** | 中 | 79fb462 out-of-scope #2 收尾 |
-| 9 | **E1 GetActiveMappingContextStack + E2 GetCurrentInputActionState** | 小 | PIE 排查 "input 没生效" 的最短路径 |
-| 10 | **E3 TraceInputEvents** | 中 | 回归 / soak / golden-image 配套 |
+| 排名 | 项 | 状态 |
+|---|---|---|
+| 7 | ~~**D1 FindIAReferences + C1 FindBindActionCallSites + C2 FindEnhancedInputEventNodes**~~ | ✅ commit `833d1e1` — `find_input_action_references(ia, scope)` 一站式：IMC mappings + EnhancedInputAction event 节点 + GetInputActionValue 节点 + BindAction CallFunction 调用点。在 GameAnimationSample 上跑出 11 条真实引用。 |
+| 8 | ~~**A7/A8 per-mapping Trigger/Modifier in IMC**~~ | ✅ commit `833d1e1` — `add_trigger_to_imc_mapping(imc, ia, key, class, json)` + 对称 modifier + 各自 remove。79fb462 out-of-scope #2 收尾。 |
+| 9 | ~~**E1 GetActiveMappingContextStack + E2 GetCurrentInputActionState**~~ | ✅ commit `833d1e1` — E1 走 IEnhancedInputSubsystemInterface::HasMappingContext 反查（GetAppliedInputContextData 在 5.7 是 protected）；E2 用 FindActionInstanceData 返回 ETriggerEvent + Value(FVector) + 两个 elapsed time。 |
+| 10 | **E3 TraceInputEvents** | 暂缓 —— 跟 reactive subsystem (`RegisterRuntimeInputAction`) 重叠度较高，先用 reactive 满足；独立的 ring-buffer trace 留作单独 PR。 |
 
-P2（旧版兼容 + 玩家自定义键 + 一键导入）：
+P2（旧版兼容 + 玩家自定义键 + 一键导入）：**11/12/13/14/15/16 全部交付 2026-05-07。**
 
-| 排名 | 项 | 估时 | 理由 |
-|---|---|---|---|
-| 11 | **G1 ImportInputBindingsFromJson** | 中 | LLM 友好，能跨项目搬整套 |
-| 12 | **A3 SetInputActionProperty + A9 PlayerMappableKeySettings** | 小-中 | 玩家重绑定 UI 数据源 |
-| 13 | **F1/F2/F3 旧 Axis/Action Mappings 读写** | 小 | 老项目兼容 |
-| 14 | **B2/B3/B4/B5 旧 K2 节点工厂** | 小 | 老项目兼容 |
-| 15 | **D3 ValidateInputBindings + D4 DetectKeyConflicts** | 中 | lint，cleanup 前跑 |
-| 16 | **E5 SimulateKeyEvent** | 小-中 | 给非-IA 的 Slate / 旧 InputComponent 路径补一刀 |
+| 排名 | 项 | 状态 |
+|---|---|---|
+| 11 | ~~**G1 ImportInputBindingsFromJson + G2 Export**~~ | ✅ commit `b5515b9` — Python 辅助。`export_input_bindings_to_json` 序列化 IA + IMC 全套含 trigger/modifier JSON 参数；`import_input_bindings_from_json(spec, overwrite)` 两 pass 创建/更新；与 G2 输出格式互逆。 |
+| 12 | ~~**A3 SetInputActionProperty + A9 PlayerMappableKeySettings + A10 Duplicate**~~ | ✅ commit `833d1e1` — A3 走 FProperty::ImportText_Direct（"ValueType" 走友好枚举字符串 parse）；A9 走 FObjectProperty 反射写 protected `PlayerMappableKeySettings` 字段；A10 走 StaticDuplicateObject + AssetCreated。 |
+| 13 | ~~**F1/F2/F3 旧 Axis/Action Mappings 读写**~~ | ✅ commit `833d1e1` — UInputSettings::AddAxisMapping / GetAxisMappings / RemoveAxisMapping + SaveKeyMappings + ForceRebuildKeymaps。Action remove 当前匹配 name+key+所有 modifier flags（带修饰键的 entry 删除时需带同样 flags）。 |
+| 14 | ~~**B2/B3/B4/B5 旧 K2 节点工厂**~~ | ✅ commit `34e1eea` — `add_legacy_input_action_event_node(bp, graph, "Jump", x, y)`、`add_legacy_input_axis_event_node`、`add_input_key_event_node`、`add_input_axis_key_event_node`。同 B1 模式：set 绑定字段 → AllocateDefaultPins。 |
+| 15 | ~~**D3 ValidateInputBindings + D4 DetectKeyConflicts**~~ | ✅ commit `833d1e1` — D3 扫 IMC null Action + BP 节点 null InputAction；D4 扫指定 IMC 列表里同 key 多 IA 冲突。在 IMC_Sandbox 跑出 6 条真实冲突（SpaceBar 同时绑 IA_Jump 和 IA_Traverse 等）。**D5 detect_trigger_conflicts** 同期落地（`b5515b9`），Python 规则化 lint：Hold+Tap / Pulse+Hold / 多 Pressed/Released / Down 与其它共存。 |
+| 16 | ~~**E5 SimulateKeyEvent**~~ | ✅ commit `833d1e1` — `simulate_key_event(key, pressed, user_index)` 走 FSlateApplication::ProcessKeyDown/Up，覆盖菜单 / Slate / 旧 InputComponent 路径。 |
+
+新发现项（P0 实施中浮现，本批次同期落地）：
+
+| 项 | 状态 |
+|---|---|
+| ~~**C4 BeginPlay→AddMappingContext 图生成**~~ | ✅ commit `34e1eea` — `add_pawn_input_begin_play_setup(bp, imc_path, priority, x, y)` 一键生成完整 4 节点链：Event ReceiveBeginPlay → GetPlayerController → GetSubsystemFromPC&lt;UEnhancedInputLocalPlayerSubsystem&gt; → AddMappingContext，3 条数据线 + 1 条 exec。重用既有 BeginPlay。 |
+| ~~**B7 ActionValue 自动接数据 pin**~~ | ✅ commit `34e1eea` — `wire_enhanced_input_action_to_function(..., bAutoWireActionValue=true)`（默认开）：exec 接好后扫 CallFunction 的 input 数据 pin，schema 类型相容时自动接 ActionValue→第一个匹配 pin。Smoke 验证 IA_Move(Axis2D) → OnMove(FVector2D) 双线接齐。 |
+| ~~**get_input_action_triggers_full / modifiers_full**~~ | ✅ commit `833d1e1` — 完整 UPROPERTY JSON dump，跟 A4/A6 写 API 配套，G1/G2 round-trip 用。 |
+| ~~**list_input_actions_by_value_type**~~ | ✅ commit `833d1e1` — list_input_actions 加 ValueType 过滤参数。 |
+| **K2Node_AddMappingContext 单独工厂** | 不需要 —— C4 助手已包了完整链；只想要单独节点的话 add_call_function_node 通用路径足够。 |
+| **add_ia_mapping_to_imc 扩展接 trigger/modifier** | 不需要 —— A7/A8 已能在 mapping 创建后追加，无需融合签名。 |
+| **DataValidation 钩子（5.4+）** | 暂缓 —— 用面窄，用户没明确需求。 |
 
 P3（大件，单独立项再做）：
 
@@ -161,6 +173,7 @@ P3（大件，单独立项再做）：
 | C5 ConvertLegacyInputBindingToEnhanced | 大改图，使用面窄；在 P2 的 F1-F4 + B1-B7 都齐之后再说 |
 | F4 MigrateLegacyInputToEnhanced | 同上 |
 | G3 Preset* | G1 落地后用 JSON 预制即可，不需要 C++ |
+| E3 TraceInputEvents | 跟 reactive_handlers `RegisterRuntimeInputAction` 重叠，先用那个；独立 ring-buffer trace 留作单独 PR |
 
 ---
 
