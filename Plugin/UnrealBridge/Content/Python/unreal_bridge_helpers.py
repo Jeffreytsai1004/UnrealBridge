@@ -238,6 +238,207 @@ def scaffold_enhanced_input_pawn(bp_path, ia_action_map, parent_class=None,
     return {"blueprint": bp_path, "imc": imc_path, "wired": results}
 
 
+# ─── G1 / G2 — Bulk Input bindings JSON import/export ───────────────
+
+def export_input_bindings_to_json(content_path_filter="/Game", include_imcs=True,
+                                   include_ias=True):
+    """Serialize the project's IA + IMC stack into a single JSON-friendly dict.
+
+    Round-trips with `import_input_bindings_from_json`. Useful for diffing
+    between branches / templating common input setups / cross-project copy.
+
+    Returns:
+        {
+            "input_actions": [{path, value_type, description, consume_input,
+                               trigger_when_paused, triggers:[{class,params}],
+                               modifiers:[{class,params}]}, ...],
+            "mapping_contexts": [{path, description, mappings:[
+                {action_path, key, triggers:[{class,params}], modifiers:[{class,params}]
+                }, ...]}, ...]
+        }
+    """
+    gp = unreal.UnrealBridgeGameplayLibrary
+    asset_lib = unreal.EditorAssetLibrary
+    out = {"input_actions": [], "mapping_contexts": []}
+
+    if include_ias:
+        for path in gp.list_input_actions(content_path_filter, 0):
+            ia = unreal.load_asset(path)
+            if not ia:
+                continue
+            entry = {
+                "path": path,
+                "value_type": ia.value_type.name.lower().capitalize().replace("Axis1d", "Axis1D")
+                              .replace("Axis2d", "Axis2D").replace("Axis3d", "Axis3D"),
+                "description": str(ia.action_description),
+                "consume_input": bool(ia.consume_input),
+                "trigger_when_paused": bool(ia.trigger_when_paused),
+                "triggers":  [{"class": t.class_name, "params": t.params_json}
+                              for t in gp.get_input_action_triggers_full(path)],
+                "modifiers": [{"class": m.class_name, "params": m.params_json}
+                              for m in gp.get_input_action_modifiers_full(path)],
+            }
+            out["input_actions"].append(entry)
+
+    if include_imcs:
+        for path in gp.list_input_mapping_contexts(content_path_filter, 0):
+            imc = unreal.load_asset(path)
+            if not imc:
+                continue
+            entry = {
+                "path": path,
+                "description": str(imc.context_description),
+                "mappings": [],
+            }
+            for m in gp.get_input_mapping_context_mappings(path):
+                entry["mappings"].append({
+                    "action_path": m.action_path,
+                    "key": m.key_name,
+                    # The read API only gives class names per-mapping, not
+                    # individual JSON params. JSON params on per-mapping
+                    # triggers/modifiers can't be round-tripped today; this
+                    # is a known limitation flagged in the roadmap doc.
+                    "triggers":  [{"class": c} for c in list(m.trigger_classes)],
+                    "modifiers": [{"class": c} for c in list(m.modifier_classes)],
+                })
+            out["mapping_contexts"].append(entry)
+    return out
+
+
+def import_input_bindings_from_json(spec, default_save=True, overwrite=False):
+    """Bulk create/update IA + IMC + mappings from a dict in the format
+    returned by `export_input_bindings_to_json`.
+
+    Behavior per asset:
+      - If the asset doesn't exist → created.
+      - If it exists and `overwrite=False` (default) → IA properties are
+        updated in place; existing triggers/modifiers are LEFT (additive).
+      - If it exists and `overwrite=True` → all triggers/modifiers cleared
+        first, then re-applied from the spec.
+
+    Returns:
+        {"created": [...], "updated": [...], "skipped": [...], "errors": [...]}
+    """
+    gp = unreal.UnrealBridgeGameplayLibrary
+    asset_lib = unreal.EditorAssetLibrary
+    log = {"created": [], "updated": [], "skipped": [], "errors": []}
+
+    # Pass 1 — IAs (so IMC mappings can reference them)
+    for ia_spec in spec.get("input_actions", []):
+        path = ia_spec["path"]
+        value_type = ia_spec.get("value_type", "Boolean")
+        desc = ia_spec.get("description", "")
+        triggers = ia_spec.get("triggers", [])
+        modifiers = ia_spec.get("modifiers", [])
+        consume = ia_spec.get("consume_input")
+        paused  = ia_spec.get("trigger_when_paused")
+
+        existed = asset_lib.does_asset_exist(path)
+        if not existed:
+            created = gp.create_input_action(path, value_type, desc, default_save)
+            if not created:
+                log["errors"].append({"path": path, "reason": "create failed"})
+                continue
+            log["created"].append(path)
+        else:
+            log["updated"].append(path)
+            if overwrite:
+                # Clear triggers/modifiers
+                ia = unreal.load_asset(path)
+                while ia.triggers: gp.remove_trigger_from_ia(path, 0, False)
+                while ia.modifiers: gp.remove_modifier_from_ia(path, 0, False)
+            # Update value type + description even if existed
+            gp.set_input_action_property(path, "ValueType", value_type, False)
+            if desc:
+                gp.set_input_action_property(path, "ActionDescription", f'"{desc}"', False)
+
+        if consume is not None:
+            gp.set_input_action_property(path, "bConsumeInput", "true" if consume else "false", False)
+        if paused is not None:
+            gp.set_input_action_property(path, "bTriggerWhenPaused", "true" if paused else "false", False)
+
+        for t in triggers:
+            gp.add_trigger_to_ia(path, t["class"], t.get("params", "{}"), False)
+        for m in modifiers:
+            gp.add_modifier_to_ia(path, m["class"], m.get("params", "{}"), False)
+
+        if default_save:
+            asset_lib.save_asset(path)
+
+    # Pass 2 — IMCs + mappings
+    for imc_spec in spec.get("mapping_contexts", []):
+        path = imc_spec["path"]
+        desc = imc_spec.get("description", "")
+
+        if not asset_lib.does_asset_exist(path):
+            out = gp.create_input_mapping_context(path, desc, default_save)
+            if not out:
+                log["errors"].append({"path": path, "reason": "create failed"})
+                continue
+            log["created"].append(path)
+        else:
+            log["updated"].append(path)
+
+        for m in imc_spec.get("mappings", []):
+            ia = m["action_path"]
+            key = m["key"]
+            gp.add_ia_mapping_to_imc(path, ia, key, False)
+            for t in m.get("triggers", []):
+                gp.add_trigger_to_imc_mapping(path, ia, key, t["class"], t.get("params", "{}"), False)
+            for mod in m.get("modifiers", []):
+                gp.add_modifier_to_imc_mapping(path, ia, key, mod["class"], mod.get("params", "{}"), False)
+
+        if default_save:
+            asset_lib.save_asset(path)
+
+    return log
+
+
+# ─── D5 — rule-based trigger conflict detection ─────────────────────
+
+def detect_trigger_conflicts(input_action_path):
+    """Heuristic lint for an IA's trigger stack. Returns a list of warnings.
+
+    Rules:
+      - Hold + Tap on same IA: timed-hold and tap can both fire, but typically
+        you want only one. Flag.
+      - Multiple Pressed/Released on same IA: rare and usually wrong.
+      - Pulse + Hold: Pulse will retrigger inside the Hold window, often
+        unintended. Flag.
+      - Down + any other: Down fires every tick the key is held, which
+        usually conflicts with timed/edge triggers.
+
+    Args:
+        input_action_path: e.g. "/Game/Input/IA_Foo.IA_Foo"
+    Returns:
+        list[dict] — each dict has {rule, classes, message}
+    """
+    triggers = unreal.UnrealBridgeGameplayLibrary.get_input_action_triggers(input_action_path)
+    classes  = list(triggers[0]) if triggers else []  # First array is class-name list
+    issues = []
+
+    def has(name):
+        return any(name in c for c in classes)
+
+    if has("Hold") and has("Tap"):
+        issues.append({"rule": "hold_and_tap", "classes": ["Hold","Tap"],
+                       "message": "Hold + Tap on same IA: both can fire on the same key event"})
+    if sum(1 for c in classes if "Pressed" in c) > 1:
+        issues.append({"rule": "multiple_pressed", "classes": [c for c in classes if "Pressed" in c],
+                       "message": "Multiple Pressed triggers — typically wrong"})
+    if sum(1 for c in classes if "Released" in c) > 1:
+        issues.append({"rule": "multiple_released", "classes": [c for c in classes if "Released" in c],
+                       "message": "Multiple Released triggers — typically wrong"})
+    if has("Pulse") and has("Hold"):
+        issues.append({"rule": "pulse_and_hold", "classes": ["Pulse","Hold"],
+                       "message": "Pulse will retrigger during Hold window — often unintended"})
+    if has("Down") and len(classes) > 1:
+        issues.append({"rule": "down_with_others", "classes": classes,
+                       "message": "Down fires every tick the key is held; conflicts with timed/edge triggers"})
+
+    return issues
+
+
 def get_world_info():
     """Get information about the current world/level.
 
