@@ -204,6 +204,29 @@ struct FBridgeCallEdge
 	FString TargetKind;
 };
 
+/** Result of WireEnhancedInputActionToFunction (B7). */
+USTRUCT(BlueprintType)
+struct FBridgeWireIAResult
+{
+	GENERATED_BODY()
+
+	/** GUID of the K2Node_EnhancedInputAction event node (new or reused). Empty on failure. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Blueprint")
+	FString EventNodeGuid;
+
+	/** GUID of the K2Node_CallFunction node added for the target function. Empty on failure. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Blueprint")
+	FString CallNodeGuid;
+
+	/** True iff the trigger-event exec pin → CallFunction's exec_in connection succeeded. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Blueprint")
+	bool bWired = false;
+
+	/** Diagnostic when bWired=false (e.g. "trigger pin 'Foo' not found", "schema rejected connection"). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Blueprint")
+	FString FailureReason;
+};
+
 /** A single node in a Blueprint function graph. */
 USTRUCT(BlueprintType)
 struct FBridgeNodeInfo
@@ -2893,6 +2916,36 @@ public:
 	static FString AddGetInputActionValueNode(const FString& BlueprintPath,
 		const FString& GraphName, const FString& InputActionPath,
 		int32 NodePosX, int32 NodePosY);
+
+	/**
+	 * Composite helper: place a K2Node_EnhancedInputAction event node for
+	 * `InputActionPath` (or reuse an existing one), place a K2Node_CallFunction
+	 * for `TargetFunctionName` on `TargetClassPath` (empty = self/this BP),
+	 * and wire the event's `TriggerEventPin` exec pin to the CallFunction's
+	 * exec_in pin. The C4 Pawn-scaffold inner loop, exposed standalone for
+	 * direct use.
+	 *
+	 * `TriggerEventPin` is one of "Triggered" / "Started" / "Ongoing" /
+	 * "Canceled" / "Completed" — case-sensitive, matches the exec pin name.
+	 *
+	 * Note: UEnhancedInputComponent::BindAction is not BlueprintCallable.
+	 * The K2Node_EnhancedInputAction event node IS the BP equivalent of a
+	 * BindAction call — the BP compiler expands it into BindAction during
+	 * compile via UK2Node_EnhancedInputAction::ExpandNode. So this helper
+	 * does NOT add a literal "BindAction" function call node; it adds the
+	 * event node + a CallFunction for your handler, and wires them.
+	 *
+	 * Returns both GUIDs + a bWired flag. On failure the bWired flag is
+	 * false and FailureReason carries the diagnostic. Either GUID may be
+	 * empty if its node creation failed.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Blueprint")
+	static FBridgeWireIAResult WireEnhancedInputActionToFunction(
+		const FString& BlueprintPath, const FString& GraphName,
+		const FString& InputActionPath, const FString& TriggerEventPin,
+		const FString& TargetClassPath, const FString& TargetFunctionName,
+		int32 EventNodeX, int32 EventNodeY,
+		int32 CallNodeX,  int32 CallNodeY);
 
 	// ─── Editor focus-state query (#17) ─────────────────────────────
 

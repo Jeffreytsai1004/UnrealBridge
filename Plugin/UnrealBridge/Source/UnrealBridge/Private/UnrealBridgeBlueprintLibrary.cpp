@@ -11482,3 +11482,105 @@ FString UUnrealBridgeBlueprintLibrary::AddGetInputActionValueNode(
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
 	return Node->NodeGuid.ToString(EGuidFormats::Digits);
 }
+
+FBridgeWireIAResult UUnrealBridgeBlueprintLibrary::WireEnhancedInputActionToFunction(
+	const FString& BlueprintPath, const FString& GraphName,
+	const FString& InputActionPath, const FString& TriggerEventPin,
+	const FString& TargetClassPath, const FString& TargetFunctionName,
+	int32 EventNodeX, int32 EventNodeY,
+	int32 CallNodeX,  int32 CallNodeY)
+{
+	FBridgeWireIAResult Out;
+
+	UBlueprint* BP = LoadBP(BlueprintPath);
+	if (!BP) { Out.FailureReason = TEXT("blueprint not found"); return Out; }
+	UEdGraph* Graph = BridgeBlueprintGraphWriteImpl::FindGraphByName(BP, GraphName);
+	if (!Graph) { Out.FailureReason = TEXT("graph not found"); return Out; }
+
+	UInputAction* IA = LoadObject<UInputAction>(nullptr, *InputActionPath);
+	if (!IA) { Out.FailureReason = TEXT("input action asset not found"); return Out; }
+
+	// Resolve target class — empty path means self (this BP's generated class).
+	UClass* TargetClass = TargetClassPath.IsEmpty()
+		? (UClass*)(BP->GeneratedClass ? BP->GeneratedClass : BP->ParentClass)
+		: BridgeBlueprintGraphWriteImpl::ResolveTargetClass(BP, TargetClassPath);
+	if (!TargetClass) { Out.FailureReason = TEXT("target class not found"); return Out; }
+
+	UFunction* Fn = TargetClass->FindFunctionByName(FName(*TargetFunctionName));
+	if (!Fn) { Out.FailureReason = TEXT("target function not found on class"); return Out; }
+
+	Graph->Modify();
+	BP->Modify();
+
+	// (1) Event node — reuse existing if same IA already on graph.
+	UK2Node_EnhancedInputAction* EventNode = nullptr;
+	for (UEdGraphNode* N : Graph->Nodes)
+	{
+		if (UK2Node_EnhancedInputAction* Existing = Cast<UK2Node_EnhancedInputAction>(N))
+		{
+			if (Existing->InputAction == IA) { EventNode = Existing; break; }
+		}
+	}
+	if (!EventNode)
+	{
+		EventNode = NewObject<UK2Node_EnhancedInputAction>(Graph);
+		EventNode->InputAction = IA;
+		EventNode->CreateNewGuid();
+		EventNode->NodePosX = EventNodeX;
+		EventNode->NodePosY = EventNodeY;
+		Graph->AddNode(EventNode, false, false);
+		EventNode->PostPlacedNewNode();
+		EventNode->AllocateDefaultPins();
+	}
+	else
+	{
+		EventNode->Modify();
+		EventNode->NodePosX = EventNodeX;
+		EventNode->NodePosY = EventNodeY;
+	}
+	Out.EventNodeGuid = EventNode->NodeGuid.ToString(EGuidFormats::Digits);
+
+	// (2) CallFunction node.
+	UK2Node_CallFunction* CallNode = NewObject<UK2Node_CallFunction>(Graph);
+	CallNode->CreateNewGuid();
+	CallNode->SetFromFunction(Fn);
+	CallNode->NodePosX = CallNodeX;
+	CallNode->NodePosY = CallNodeY;
+	Graph->AddNode(CallNode, false, false);
+	CallNode->PostPlacedNewNode();
+	CallNode->AllocateDefaultPins();
+	Out.CallNodeGuid = CallNode->NodeGuid.ToString(EGuidFormats::Digits);
+
+	// (3) Wire trigger exec → call exec_in.
+	UEdGraphPin* TriggerPin = EventNode->FindPin(FName(*TriggerEventPin), EGPD_Output);
+	if (!TriggerPin || TriggerPin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+	{
+		Out.FailureReason = FString::Printf(
+			TEXT("trigger event pin '%s' not found on event node (or not an exec pin)"),
+			*TriggerEventPin);
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+		return Out;
+	}
+
+	// CallFunction exec input is named "execute" (UEdGraphSchema_K2::PN_Execute).
+	UEdGraphPin* CallExecIn = CallNode->FindPin(UEdGraphSchema_K2::PN_Execute, EGPD_Input);
+	if (!CallExecIn)
+	{
+		// Pure functions have no exec_in pin — that's a real misconfig for this helper.
+		Out.FailureReason = TEXT("call function has no exec_in pin (pure function?)");
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+		return Out;
+	}
+
+	const UEdGraphSchema* Schema = Graph->GetSchema();
+	if (!Schema || !Schema->TryCreateConnection(TriggerPin, CallExecIn))
+	{
+		Out.FailureReason = TEXT("schema rejected exec connection");
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+		return Out;
+	}
+
+	Out.bWired = true;
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+	return Out;
+}
