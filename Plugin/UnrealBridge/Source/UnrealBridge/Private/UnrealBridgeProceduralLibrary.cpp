@@ -16,6 +16,7 @@
 #include "ScopedTransaction.h"
 #include "LandscapeProxy.h"
 #include "LandscapeInfo.h"
+#include "NavigationSystem.h"
 
 #define LOCTEXT_NAMESPACE "UnrealBridgeProcedural"
 
@@ -434,6 +435,141 @@ TArray<FVector> UUnrealBridgeProceduralLibrary::SamplePointsPoissonDisk2D(
 
 // ─── M2 — Filter ─────────────────────────────────────────────
 
+TArray<FVector> UUnrealBridgeProceduralLibrary::FilterPointsBySlope(
+	const TArray<FVector>& In, float MaxSlopeDeg, float BounceUp)
+{
+	TArray<FVector> Out;
+
+	if (In.Num() == 0)
+	{
+		return Out;
+	}
+
+	UWorld* World = BridgeProceduralImpl::GetEditorWorld();
+	if (!World)
+	{
+		return Out;
+	}
+
+	// Slope angle is between hit normal and +Z. Keep when dot >= cos(MaxSlope).
+	const float MaxRad = FMath::DegreesToRadians(FMath::Clamp(MaxSlopeDeg, 0.f, 90.f));
+	const float MinDot = FMath::Cos(MaxRad);
+
+	Out.Reserve(In.Num());
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(BridgeFilterBySlope), /*bTraceComplex=*/true);
+
+	for (const FVector& P : In)
+	{
+		FHitResult Hit;
+		const FVector Start(P.X, P.Y, P.Z + BounceUp);
+		const FVector End(P.X, P.Y, P.Z - BounceUp);
+
+		if (World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params))
+		{
+			const float Dot = FVector::DotProduct(Hit.ImpactNormal, FVector::UpVector);
+			if (Dot >= MinDot)
+			{
+				Out.Add(P);
+			}
+		}
+		// miss → drop (no surface = can't determine slope)
+	}
+
+	return Out;
+}
+
+TArray<FVector> UUnrealBridgeProceduralLibrary::FilterPointsByMinDistance(
+	const TArray<FVector>& In, float MinDist)
+{
+	if (In.Num() == 0)
+	{
+		return TArray<FVector>();
+	}
+	if (MinDist <= 0.f)
+	{
+		// Pass-through — no filter.
+		return In;
+	}
+
+	// Compute XY bounds of input set.
+	float MinX = TNumericLimits<float>::Max();
+	float MinY = TNumericLimits<float>::Max();
+	float MaxX = TNumericLimits<float>::Lowest();
+	float MaxY = TNumericLimits<float>::Lowest();
+	for (const FVector& P : In)
+	{
+		MinX = FMath::Min(MinX, static_cast<float>(P.X));
+		MaxX = FMath::Max(MaxX, static_cast<float>(P.X));
+		MinY = FMath::Min(MinY, static_cast<float>(P.Y));
+		MaxY = FMath::Max(MaxY, static_cast<float>(P.Y));
+	}
+
+	const float CellSize = MinDist / FMath::Sqrt(2.f);
+	const int32 GridW = FMath::Max(1, FMath::CeilToInt((MaxX - MinX) / CellSize) + 1);
+	const int32 GridH = FMath::Max(1, FMath::CeilToInt((MaxY - MinY) / CellSize) + 1);
+
+	const int64 Cells = static_cast<int64>(GridW) * static_cast<int64>(GridH);
+	if (Cells > static_cast<int64>(BridgeProceduralImpl::MaxPointCount) * 10)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridge: FilterPointsByMinDistance grid (%d × %d = %lld cells) too large; "
+				 "raise MinDist or shrink input span."),
+			GridW, GridH, Cells);
+		return TArray<FVector>();
+	}
+
+	TArray<TArray<int32>> Grid;
+	Grid.SetNum(static_cast<int32>(Cells));
+
+	TArray<FVector> Out;
+	Out.Reserve(In.Num());
+	const float MinD2 = MinDist * MinDist;
+
+	for (const FVector& P : In)
+	{
+		const int32 cx = FMath::Clamp(FMath::FloorToInt((P.X - MinX) / CellSize), 0, GridW - 1);
+		const int32 cy = FMath::Clamp(FMath::FloorToInt((P.Y - MinY) / CellSize), 0, GridH - 1);
+
+		bool bConflict = false;
+		for (int32 dy = -2; dy <= 2 && !bConflict; ++dy)
+		{
+			const int32 ny = cy + dy;
+			if (ny < 0 || ny >= GridH)
+			{
+				continue;
+			}
+			for (int32 dx = -2; dx <= 2 && !bConflict; ++dx)
+			{
+				const int32 nx = cx + dx;
+				if (nx < 0 || nx >= GridW)
+				{
+					continue;
+				}
+				const TArray<int32>& Cell = Grid[ny * GridW + nx];
+				for (int32 NeighIdx : Cell)
+				{
+					const FVector& Q = Out[NeighIdx];
+					const float ddx = static_cast<float>(P.X - Q.X);
+					const float ddy = static_cast<float>(P.Y - Q.Y);
+					if (ddx * ddx + ddy * ddy < MinD2)
+					{
+						bConflict = true;
+						break;
+					}
+				}
+			}
+		}
+
+		if (!bConflict)
+		{
+			const int32 NewIdx = Out.Add(P);
+			Grid[cy * GridW + cx].Add(NewIdx);
+		}
+	}
+
+	return Out;
+}
+
 TArray<FVector> UUnrealBridgeProceduralLibrary::ProjectPointsToSurface(
 	const TArray<FVector>& In, float BounceUp, float BounceDown, TArray<FVector>& OutHitNormals)
 {
@@ -610,6 +746,39 @@ bool UUnrealBridgeProceduralLibrary::ClearInstances(const FString& ActorName)
 	ISMC->Modify();
 	ISMC->ClearInstances();
 	ISMC->MarkRenderStateDirty();
+	return true;
+}
+
+bool UUnrealBridgeProceduralLibrary::RebuildProceduralNavigation(const FString& ActorName)
+{
+	UWorld* World = BridgeProceduralImpl::GetEditorWorld();
+	AActor* Actor = BridgeProceduralImpl::FindActor(World, ActorName);
+	if (!Actor)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridge: RebuildProceduralNavigation — actor '%s' not found"), *ActorName);
+		return false;
+	}
+
+	UInstancedStaticMeshComponent* ISMC = BridgeProceduralImpl::FindISMComponent(Actor);
+	if (!ISMC)
+	{
+		return false;
+	}
+
+	// HISM-only: synchronously flush the deferred cluster-tree rebuild that
+	// AddInstances skipped via bUpdateNavigation=false. Plain ISM doesn't have
+	// a cluster tree, so the cast just guards the call.
+	if (UHierarchicalInstancedStaticMeshComponent* HISMC =
+			Cast<UHierarchicalInstancedStaticMeshComponent>(ISMC))
+	{
+		HISMC->BuildTreeIfOutdated(/*Async=*/false, /*ForceUpdate=*/true);
+	}
+
+	// Re-register with the nav octree — mirrors what AddInstances would have
+	// done with bUpdateNavigation=true. Single batch update vs N per-call updates.
+	FNavigationSystem::UpdateComponentData(*ISMC);
+
 	return true;
 }
 

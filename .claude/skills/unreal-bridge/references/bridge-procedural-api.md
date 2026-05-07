@@ -8,7 +8,7 @@ Hard contract:
 - Trace-based sampling uses `ECC_Visibility` + `bTraceComplex=true`, matching the existing trace family.
 - Hard cap of **100,000 points** per call. Above that, return empty + log warning. The 100k+ scale is PCG's territory.
 
-Currently shipped (M1-1, M1-2, M1-4, M1-5, M2-7, M3-1, M3-2, M3-5). Forthcoming per roadmap: M2-1 slope filter, M2-3 min-distance filter, M3-6 nav rebuild.
+**P0 fully shipped (11/11)**: M1-1 grid, M1-2 Poisson2D, M1-4 surface, M1-5 landscape, M2-1 slope, M2-3 min-distance, M2-7 project-to-surface, M3-1 ensure ISM, M3-2 add instances, M3-5 clear, M3-6 rebuild nav. P1 (rest of M1/M2/M3) and Lane 2 (Geometry Script wrap) per `docs/plans/procedural-content-roadmap.md`.
 
 ---
 
@@ -130,6 +130,65 @@ print(f"{len(pts)} naturally-spaced points, all ≥ 3m apart")
 
 ---
 
+## filter_points_by_slope(in, max_slope_deg, bounce_up) -> list[Vector]
+
+Drop points sitting on terrain steeper than `max_slope_deg`. For each input, traces down, takes impact normal, keeps point only when angle from +Z ≤ threshold.
+
+| Param | Type | Notes |
+|---|---|---|
+| `in` | `list[Vector]` | Input point list. |
+| `max_slope_deg` | float | Maximum slope angle in degrees, clamped to [0, 90]. 0 = flat only; 90 = no filter. |
+| `bounce_up` | float (cm) | cm above each point to start trace; symmetric distance below as endpoint. 5000 typical. |
+
+Returns: filtered list (≤ input length). Misses are dropped (no surface = no slope to evaluate).
+
+**Cost** — O(N) line traces. ~5-10μs per trace.
+
+**Example**
+```python
+# 30° max slope — typical "no trees on cliffs" rule
+walkable = P.filter_points_by_slope(pts, max_slope_deg=30.0, bounce_up=5000.0)
+print(f"kept {len(walkable)}/{len(pts)} below 30°")
+```
+
+**Pitfalls**
+- Output is **original points**, not surface-projected. Pipe through `project_points_to_surface` (M2-7) afterwards if you also need ground snap.
+- Distinguishes "below threshold" (kept) from "no surface" (dropped) only by absence — caller can't tell which case caused a drop. Use `project_points_to_surface` to inspect (which keeps misses with up-normal).
+- The trace symmetric range is `±bounce_up`. If your points sit far off-surface, raise `bounce_up` — otherwise the trace ends before reaching the ground and you get false misses.
+
+---
+
+## filter_points_by_min_distance(in, min_dist) -> list[Vector]
+
+Greedy first-come-wins thinning by XY distance. Order-preserving among kept points. The standard "post-Poisson second pass with a different scale" or "thin grid before instancing" tool.
+
+| Param | Type | Notes |
+|---|---|---|
+| `in` | `list[Vector]` | Input points. |
+| `min_dist` | float (cm) | Minimum XY distance to maintain between any two kept points. ≤ 0 = pass-through (no filter). |
+
+Returns: filtered list. Order matches input (kept-only).
+
+**Cost** — O(N) amortized via flat XY grid bucket (`cell = MinDist/√2`, 5×5 neighborhood). For 10k inputs at typical density, ~2-5ms total.
+
+Memory: refused if grid would exceed 10× the 100k-cap (1M cells). Raise `min_dist` or shrink input span if hit.
+
+**Example**
+```python
+# Sample dense grid then thin to ≥ 5m spacing
+grid_pts = P.sample_points_grid(bounds, spacing=100.0, jitter_ratio=0.3, seed=42)
+print(f"grid: {len(grid_pts)} points")
+thinned = P.filter_points_by_min_distance(grid_pts, min_dist=500.0)
+print(f"thinned: {len(thinned)} points (≥ 5m apart)")
+```
+
+**Pitfalls**
+- Filter is **2D distance** (XY plane only) — matches Poisson's 2D model. For 3D distance use case, no 3D filter exists yet (out of P0).
+- "First-come-wins" depends on input order. Permuting the input may yield a different (still valid) output set with different points kept.
+- Does not project — input Z passes through unchanged. Pair with `project_points_to_surface` (before or after) for ground contact.
+
+---
+
 ## project_points_to_surface(in, bounce_up, bounce_down, out_hit_normals) -> list[Vector]
 
 Project each input point vertically onto whatever's beneath (or above, within `bounce_up`) via line trace. The standard "after Poisson2D, drape onto terrain" finishing step. Output array is **always parallel** to input — same length, no filtering.
@@ -224,6 +283,37 @@ print(f"added {len(ids)} instances, first id={ids[0]}")
 
 ---
 
+## rebuild_procedural_navigation(actor_name) -> bool
+
+Single end-of-batch nav rebuild for a procedural ISM actor. Pairs with `add_instances_by_transforms` (which defers nav update with `bUpdateNavigation=false`) — call this once after the batch instead of N times during it.
+
+| Param | Type | Notes |
+|---|---|---|
+| `actor_name` | str | Label returned by `ensure_procedural_ism_actor`. |
+
+Returns: `True` iff actor + ISMC resolved.
+
+Two effects:
+1. For HISM, `BuildTreeIfOutdated(false, true)` synchronously rebuilds the cluster tree (used by both rendering and nav-relevance queries). For plain ISM this is a no-op.
+2. `FNavigationSystem::UpdateComponentData` re-registers the component with the nav octree, mirroring `AddInstances(bUpdateNavigation=true)`'s internal behavior.
+
+**Cost** — Sync HISM tree rebuild is O(N log N) in instance count; nav octree update is amortized O(component bounds area). For 10k instances expect ~50-200ms — well worth it vs. 10k × per-call rebuilds.
+
+**Example**
+```python
+# After a batch of add_instances_by_transforms calls
+for tile in forest_tiles:
+    P.add_instances_by_transforms("Forest_Pines", tile.xforms, True)
+P.rebuild_procedural_navigation("Forest_Pines")  # ← one nav rebuild
+```
+
+**Pitfalls**
+- Skipping this after a batch leaves AI pathfinding using stale nav — agents may walk through your trees. Always call after a batch.
+- Async `BuildTreeIfOutdated` is also valid (`Async=true`) and faster, but not exposed here — the caller usually wants a deterministic sync rebuild before testing nav (e.g. running an AI test immediately after).
+- Only rebuilds nav for the one actor's component. If multiple procedural actors changed, call once per actor.
+
+---
+
 ## clear_instances(actor_name) -> bool
 
 Remove every instance from the actor's `[H]ISMC`. The actor itself remains, ready for the next batch. Wrapped in `FScopedTransaction` so undo restores the previous instance set.
@@ -249,9 +339,9 @@ ids = P.add_instances_by_transforms("Procedural_Trees_PineForest", new_xs, True)
 
 ---
 
-## End-to-end recipe (current state)
+## End-to-end recipe (P0 complete)
 
-A naturalistic forest scatter on a Landscape — this works **today** with the 8 shipped functions:
+The full Lane 1 P0 chain — naturalistic forest scatter on a Landscape, slope-filtered, nav-rebuilt:
 
 ```python
 import unreal as u
@@ -262,35 +352,44 @@ bounds = u.Box.build_aabb(u.Vector(0, 0, 0), u.Vector(20000, 20000, 0))
 
 # 1) Sample with natural spacing (Poisson) — guarantees ≥ 5m between trees
 poisson = P.sample_points_poisson_disk_2d(bounds, min_radius=500.0, max_attempts=30, seed=42)
-print(f"Poisson sampled {len(poisson)} candidates")
 
-# 2) Drape onto landscape surface — output Z + normals for each
+# 2) Drape onto landscape surface
 projected, normals = P.project_points_to_surface(poisson, 5000.0, 5000.0)
 
-# 3) Build transforms (uniform rotation/scale for now; jitter_transforms M1-10 forthcoming)
-xs = [u.Transform(p, u.Rotator(0,0,0), u.Vector(1,1,1)) for p in projected]
+# 3) Drop anything on a > 30° slope
+walkable = P.filter_points_by_slope(projected, max_slope_deg=30.0, bounce_up=5000.0)
+print(f"Poisson {len(poisson)} → projected {len(projected)} → ≤30° {len(walkable)}")
 
-# 4) Spawn HISM stub + add all instances in one batch
+# 4) Build transforms (uniform rot/scale here; jitter_transforms M1-10 forthcoming)
+xs = [u.Transform(p, u.Rotator(0,0,0), u.Vector(1,1,1)) for p in walkable]
+
+# 5) Spawn HISM stub + add all instances in one batch (nav update deferred)
 actor = P.ensure_procedural_ism_actor("Forest_Pines", "/Game/Trees/SM_Pine", b_use_hism=True)
 ids = P.add_instances_by_transforms(actor, xs, b_world_space=True)
-print(f"Placed {len(ids)} pines")
 
-# 5) Re-roll with a different seed — same chain, different seed, full deterministic re-run
-P.clear_instances(actor)
-poisson2 = P.sample_points_poisson_disk_2d(bounds, 500.0, 30, seed=99)
-proj2, _ = P.project_points_to_surface(poisson2, 5000.0, 5000.0)
-xs2 = [u.Transform(p, u.Rotator(0,0,0), u.Vector(1,1,1)) for p in proj2]
-P.add_instances_by_transforms(actor, xs2, True)
+# 6) Single end-of-batch nav rebuild (cheap vs N per-call updates)
+P.rebuild_procedural_navigation(actor)
+print(f"Placed {len(ids)} pines, nav rebuilt")
 ```
 
-For Landscape specifically, **steps 1+2 collapse** into one faster call:
+**Two-pass thinning** (post-Poisson second filter at a wider scale):
 ```python
-# When target is a Landscape, this is 5-10x faster than Poisson + project_to_surface
-pts = P.sample_points_on_landscape("Landscape_0", bounds, count=2000, seed=42)
-# pts already has correct surface Z; jump straight to step 3.
+# Already have ≥ 5m via Poisson; further thin to ≥ 15m for hero trees
+hero = P.filter_points_by_min_distance(projected, min_dist=1500.0)
+filler = [p for p in projected if p not in set(map(tuple, hero))]  # rough complement
+# place hero with SM_Pine_Large, filler with SM_Pine_Small — two HISMs
 ```
 
-**Forthcoming** (per `docs/plans/procedural-content-roadmap.md` P0):
-- `filter_points_by_slope` / `filter_points_by_min_distance` — filter chain refinement
-- `rebuild_procedural_navigation` — single nav rebuild at end of placement batch
-- `jitter_transforms` (M1-10) — randomize rotation/scale per instance from a base transform list
+**Landscape direct path** (skip Poisson + project, single faster call):
+```python
+# 5-10x faster when target is a Landscape — height comes from heightmap, not line trace
+pts = P.sample_points_on_landscape("Landscape_0", bounds, count=2000, seed=42)
+# pts already has correct surface Z; jump straight to filter / instance
+```
+
+**Forthcoming** (per `docs/plans/procedural-content-roadmap.md` P1+):
+- `jitter_transforms` (M1-10) — randomize rotation/scale per instance
+- `filter_points_by_density_mask` (M2-4) — texture-based density modulation
+- `filter_points_by_overlap` (M2-2) — keep/reject points near specific actor classes
+- `sample_points_in_volume` (M1-7) — volumetric reject sampling
+- Lane 2 — Geometry Script wrap (`UnrealBridgeGeometryLibrary`), 5.7-only

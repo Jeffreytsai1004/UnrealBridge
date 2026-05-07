@@ -117,6 +117,46 @@ public:
 	// ─── M2 — Filter ─────────────────────────────────────────
 
 	/**
+	 * Drop points that sit on terrain steeper than `MaxSlopeDeg`. For each input
+	 * point, traces down through the ground beneath it, takes the impact normal,
+	 * and keeps the point only when the angle between that normal and +Z is at
+	 * most `MaxSlopeDeg`.
+	 *
+	 * Misses (no surface within `BounceUp`/`BounceUp` range) are dropped — without
+	 * a surface there's no slope to evaluate.
+	 *
+	 * @param In            Input points.
+	 * @param MaxSlopeDeg   Maximum slope angle (degrees, 0..90). 0 = perfectly flat
+	 *                      only; 90 = no filtering.
+	 * @param BounceUp      cm above each point to start the trace; trace endpoint
+	 *                      is the symmetric distance below. 5000 typical.
+	 * @return Filtered list — original points (NOT projected). Use
+	 *         `ProjectPointsToSurface` (M2-7) afterwards if you want ground-snapped
+	 *         output too.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Procedural")
+	static TArray<FVector> FilterPointsBySlope(const TArray<FVector>& In, float MaxSlopeDeg, float BounceUp);
+
+	/**
+	 * Greedy first-come-wins thinning: scan input in order, keep a point only if
+	 * no already-kept point is within `MinDist` of it (XY-distance only — matches
+	 * the 2D model used by `SamplePointsPoissonDisk2D`). Useful as a post-Poisson
+	 * second pass with a different scale, or to thin grids before instancing.
+	 *
+	 * Implementation uses a flat XY grid bucket (`cell = MinDist/√2`, 5×5
+	 * neighborhood scan) — O(N) amortized for typical density. For inputs whose
+	 * XY bounds × density would require > 10× the 100k-point cap of cells, refuses
+	 * and returns empty (raise `MinDist` or shrink input).
+	 *
+	 * @param In       Input points.
+	 * @param MinDist  Minimum XY distance to maintain between kept points (cm).
+	 *                 ≤ 0 = pass-through (no filtering).
+	 * @return Filtered list — order-preserving among kept points.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Procedural")
+	static TArray<FVector> FilterPointsByMinDistance(const TArray<FVector>& In, float MinDist);
+
+	/**
 	 * Project each input point vertically onto the surface beneath it via
 	 * line-trace. The standard "after Poisson2D, drape onto terrain" finishing
 	 * step; also outputs the surface normal at each hit for downstream alignment.
@@ -190,4 +230,23 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Procedural")
 	static bool ClearInstances(const FString& ActorName);
+
+	/**
+	 * Single end-of-batch nav rebuild for a procedural ISM actor. Pairs with
+	 * `AddInstancesByTransforms` whose `bUpdateNavigation=false` defers per-call
+	 * nav updates — call this once after a placement batch instead of N times
+	 * during it (plan §6 #2).
+	 *
+	 * Two effects:
+	 * 1. For HISM, `BuildTreeIfOutdated(false, true)` synchronously rebuilds the
+	 *    cluster tree (used by both rendering and nav-relevance queries). For
+	 *    plain ISM this is a no-op (HISM-only API).
+	 * 2. `FNavigationSystem::UpdateComponentData` re-registers the component with
+	 *    the navigation octree, which is what `AddInstances(bUpdateNavigation=true)`
+	 *    would have done internally per call.
+	 *
+	 * @return true iff the actor + its [H]ISMC resolved.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Procedural")
+	static bool RebuildProceduralNavigation(const FString& ActorName);
 };
