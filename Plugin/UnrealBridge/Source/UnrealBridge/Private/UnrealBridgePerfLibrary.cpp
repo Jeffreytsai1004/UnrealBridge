@@ -20,6 +20,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/EngineVersionComparison.h"
+#include "Misc/ScopeExit.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/Package.h"
 #include "Misc/App.h"
@@ -3010,6 +3011,7 @@ TArray<FBridgeTraceChannelInfo> UUnrealBridgePerfLibrary::ListTraceChannels()
 #include "TraceServices/Model/Threads.h"
 #include "TraceServices/Model/LoadTimeProfiler.h"
 #include "TraceServices/Model/Counters.h"
+#include "TraceServices/Model/AllocationsProvider.h"
 #include "TraceServices/Containers/Tables.h"
 #include "ProfilingDebugging/MiscTrace.h"  // ETraceFrameType
 
@@ -3480,6 +3482,142 @@ FBridgePerfTraceSummary UUnrealBridgePerfLibrary::ParseTraceToSummary(
 				}
 			}
 			delete PkgTable;
+		}
+	}
+
+	Out.bSuccess = true;
+	return Out;
+}
+
+// ─── M6-1 ParseAllocTraceToSummary ───────────────────────────────
+
+FBridgePerfAllocSummary UUnrealBridgePerfLibrary::ParseAllocTraceToSummary(const FString& UtracePath)
+{
+	FBridgePerfAllocSummary Out;
+	Out.TracePath = UtracePath;
+
+	IFileManager& FileMgr = IFileManager::Get();
+	if (!FileMgr.FileExists(*UtracePath))
+	{
+		Out.Error = FString::Printf(TEXT("trace file not found: %s"), *UtracePath);
+		return Out;
+	}
+	Out.FileSizeBytes = FileMgr.FileSize(*UtracePath);
+	if (Out.FileSizeBytes <= 0)
+	{
+		Out.Error = FString::Printf(TEXT("trace file empty or unreadable: %s"), *UtracePath);
+		return Out;
+	}
+
+	ITraceServicesModule* TSModule = FModuleManager::LoadModulePtr<ITraceServicesModule>("TraceServices");
+	if (!TSModule)
+	{
+		Out.Error = TEXT("TraceServices module load failed");
+		return Out;
+	}
+	TSharedPtr<TraceServices::IAnalysisService> AnalysisService = TSModule->GetAnalysisService();
+	if (!AnalysisService)
+	{
+		Out.Error = TEXT("TraceServices::IAnalysisService unavailable");
+		return Out;
+	}
+
+	TSharedPtr<const TraceServices::IAnalysisSession> Session = AnalysisService->Analyze(*UtracePath);
+	if (!Session.IsValid())
+	{
+		Out.Error = TEXT("Analyze() returned null session — trace probably malformed");
+		return Out;
+	}
+
+	TraceServices::FAnalysisSessionReadScope ReadScope(*Session);
+
+	const TraceServices::IAllocationsProvider* AllocProv = TraceServices::ReadAllocationsProvider(*Session);
+	if (!AllocProv)
+	{
+		Out.Error = TEXT("AllocationsProvider unavailable — trace lacks memalloc channel");
+		Out.bSuccess = true; // call succeeded, just no data.
+		return Out;
+	}
+
+	// AllocationsProvider has its own RAII read lock that runs in addition to
+	// the session-level read scope; both are required.
+	AllocProv->BeginRead();
+	ON_SCOPE_EXIT { AllocProv->EndRead(); };
+
+	if (!AllocProv->IsInitialized())
+	{
+		Out.Error = TEXT("AllocationsProvider not initialized — trace likely empty");
+		Out.bSuccess = true;
+		return Out;
+	}
+
+	Out.bHasEvents = AllocProv->HasAllocationEvents();
+	if (!Out.bHasEvents)
+	{
+		Out.bSuccess = true;
+		return Out;
+	}
+
+	const int32 PointCount = AllocProv->GetTimelineNumPoints();
+	if (PointCount > 0)
+	{
+		// Walk the full timeline once to find peak total + peak live count.
+		uint64 PeakBytes = 0;
+		AllocProv->EnumerateTimeline(TraceServices::IAllocationsProvider::ETimelineU64::MaxTotalAllocatedMemory,
+			0, PointCount - 1,
+			[&PeakBytes](double /*Time*/, double /*Duration*/, uint64 Value)
+			{
+				if (Value > PeakBytes) PeakBytes = Value;
+			});
+		Out.PeakTotalAllocatedBytes = static_cast<int64>(PeakBytes);
+
+		uint32 PeakLive = 0;
+		AllocProv->EnumerateTimeline(TraceServices::IAllocationsProvider::ETimelineU32::MaxLiveAllocations,
+			0, PointCount - 1,
+			[&PeakLive](double /*Time*/, double /*Duration*/, uint32 Value)
+			{
+				if (Value > PeakLive) PeakLive = Value;
+			});
+		Out.PeakLiveAllocations = static_cast<int64>(PeakLive);
+
+		// Sum the per-bin alloc / free event counts to get totals.
+		uint64 SumAllocs = 0;
+		AllocProv->EnumerateTimeline(TraceServices::IAllocationsProvider::ETimelineU32::AllocEvents,
+			0, PointCount - 1,
+			[&SumAllocs](double /*Time*/, double /*Duration*/, uint32 Value)
+			{
+				SumAllocs += Value;
+			});
+		Out.TotalAllocEvents = static_cast<int64>(SumAllocs);
+
+		uint64 SumFrees = 0;
+		AllocProv->EnumerateTimeline(TraceServices::IAllocationsProvider::ETimelineU32::FreeEvents,
+			0, PointCount - 1,
+			[&SumFrees](double /*Time*/, double /*Duration*/, uint32 Value)
+			{
+				SumFrees += Value;
+			});
+		Out.TotalFreeEvents = static_cast<int64>(SumFrees);
+
+		Out.AllocFreeDelta = Out.TotalAllocEvents - Out.TotalFreeEvents;
+	}
+
+	// Tag inventory.
+	AllocProv->EnumerateTags(
+		[&Out](const TCHAR* Name, const TCHAR* /*FullPath_unused*/, TraceServices::TagIdType Id, TraceServices::TagIdType ParentId)
+		{
+			FBridgePerfAllocTag Row;
+			Row.Id        = static_cast<int32>(Id);
+			Row.ParentId  = ParentId == ~uint32(0) ? -1 : static_cast<int32>(ParentId);
+			Row.Name      = Name ? FString(Name) : FString();
+			Out.Tags.Add(MoveTemp(Row));
+		});
+	// Backfill FullPath via GetTagFullPath after the enumerate (tag list is now stable).
+	for (FBridgePerfAllocTag& T : Out.Tags)
+	{
+		if (const TCHAR* Full = AllocProv->GetTagFullPath(static_cast<TraceServices::TagIdType>(T.Id)))
+		{
+			T.FullPath = FString(Full);
 		}
 	}
 

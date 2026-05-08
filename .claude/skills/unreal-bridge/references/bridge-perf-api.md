@@ -161,6 +161,29 @@ for row in s.u_objects.top_classes[:5]:
 
 ---
 
+## parse_alloc_trace_to_summary(utrace_path) -> FBridgePerfAllocSummary
+
+**(M6-1)** Parse a `.utrace` file's allocation provider into a structured summary. Trace **must** contain the `memalloc` channel **AND** be captured from engine startup (`-trace=memalloc,frame,cpu` on the editor command line) — `Trace.Start memalloc=on` at runtime cannot retroactively install the malloc hooks needed to record events.
+
+| Field | Type | Notes |
+|---|---|---|
+| `trace_path` / `file_size_bytes` | str / int64 | Echoed back. |
+| `has_events` | bool | False when the alloc provider is empty (channel missing or runtime-only enable). Other fields will be 0. |
+| `peak_total_allocated_bytes` | int64 | Peak commit across the trace (`MaxTotalAllocatedMemory` timeline). |
+| `peak_live_allocations` | int64 | Peak number of simultaneously-live allocations. |
+| `total_alloc_events` / `total_free_events` | int64 | Cumulative event counts. |
+| `alloc_free_delta` | int64 | `alloc - free`. Editor traces always end > 0 (editor doesn't free everything). Compare across two captures of the same workload to detect leaks. |
+| `tags` | array of `FBridgePerfAllocTag` | Full LLM tag inventory (`{id, parent_id, name, full_path}`; root tags have `parent_id=-1`). |
+| `success` | bool | True on success; on failure populates `error`. |
+
+**Phase 2 deferred**: per-allocation top-N "unfreed by size + callstack" requires the alloc provider's async `StartQuery` / `PollQuery` / `NextResult` machinery. Not in this MVP — the aggregate data above is enough to detect "did the run leak", peak commit, and which subsystems are tagged.
+
+**Pitfalls**
+- Mid-run `Trace.Start memalloc=on` produces empty alloc data (no startup hooks).
+- Alloc traces are large — 1 GB of memory activity ~= multi-GB trace. Cap trace duration.
+
+---
+
 ## get_frame_time_percentiles(percentiles) -> array of float
 
 **(M5-4)** Compute percentile frame times from the always-on internal frame-time histogram. The histogram is populated by an `OnEndFrame` hook that has been recording every frame since module load (see `reset_frame_time_histogram` to baseline before a measurement window).

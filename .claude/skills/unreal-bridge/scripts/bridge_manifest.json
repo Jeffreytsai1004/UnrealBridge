@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-05-08T16:35:42+00:00",
+  "generated_at": "2026-05-08T16:39:29+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -17626,6 +17626,18 @@
           "params": [],
           "returns": "Array[BridgeTraceChannelInfo]"
         },
+        "parse_alloc_trace_to_summary": {
+          "doc": "X.parse_alloc_trace_to_summary(utrace_path) -> BridgePerfAllocSummary",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "utrace_path",
+              "type": ""
+            }
+          ],
+          "returns": "BridgePerfAllocSummary"
+        },
         "parse_trace_to_summary": {
           "doc": "X.parse_trace_to_summary(utrace_path, top_n=20, top_n_per_thread=10, top_n_counters=100) -> BridgePerfTraceSummary",
           "params": [
@@ -21023,6 +21035,25 @@
       "thread_name",
       "top_scopes",
       "total_cpu_ms"
+    ],
+    "BridgePerfAllocSummary": [
+      "alloc_free_delta",
+      "error",
+      "file_size_bytes",
+      "has_events",
+      "peak_live_allocations",
+      "peak_total_allocated_bytes",
+      "success",
+      "tags",
+      "total_alloc_events",
+      "total_free_events",
+      "trace_path"
+    ],
+    "BridgePerfAllocTag": [
+      "full_path",
+      "id",
+      "name",
+      "parent_id"
     ],
     "BridgePerfBreakdownRow": [
       "count",

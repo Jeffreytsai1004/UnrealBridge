@@ -848,6 +848,94 @@ struct FBridgePerfTraceSummary
 	FString Error;
 };
 
+/** One LLM tag from the alloc trace (M6-1). */
+USTRUCT(BlueprintType)
+struct FBridgePerfAllocTag
+{
+	GENERATED_BODY()
+
+	/** Tag id assigned by the alloc tracer. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 Id = 0;
+
+	/** Parent tag id (-1 for root tags). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 ParentId = -1;
+
+	/** Display name (e.g. "Textures", "Audio.Mixer"). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString Name;
+
+	/** Full hierarchical path including parent (e.g. "Audio/Mixer/Decoders"). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString FullPath;
+};
+
+/**
+ * Result of `parse_alloc_trace_to_summary` (M6-1). Aggregates traceServices'
+ * IAllocationsProvider over the full session interval. The async per-allocation
+ * query path (`EQueryRule::aAf` + StartQuery / PollQuery / NextResult) for
+ * top-N unfreed allocations by size+callstack is deferred to M6-1 phase 2 —
+ * this MVP delivers timeline aggregates + tag inventory which are already
+ * enough to answer "did the run leak", "peak commit", "what LLM tags are
+ * registered" without touching the async machinery.
+ */
+USTRUCT(BlueprintType)
+struct FBridgePerfAllocSummary
+{
+	GENERATED_BODY()
+
+	/** Echoed back. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString TracePath;
+
+	/** OS-reported size of the .utrace file. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 FileSizeBytes = 0;
+
+	/** True when the AllocationsProvider reported any alloc/free/heap events.
+	 *  False when the trace lacks the `memalloc` channel — every other field
+	 *  will be 0. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bHasEvents = false;
+
+	/** Peak total allocated memory across the trace, in bytes. Sourced from
+	 *  the `MaxTotalAllocatedMemory` timeline. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 PeakTotalAllocatedBytes = 0;
+
+	/** Peak number of simultaneously-live allocations. Sourced from the
+	 *  `MaxLiveAllocations` timeline. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 PeakLiveAllocations = 0;
+
+	/** Total alloc events the trace recorded (cumulative across all threads). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 TotalAllocEvents = 0;
+
+	/** Total free events the trace recorded. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 TotalFreeEvents = 0;
+
+	/** Difference: alloc - free. Positive = trace ended with live allocations
+	 *  (always true for editor traces — the editor doesn't free everything on
+	 *  shutdown). Use compared between two captures of the same workload to
+	 *  detect leaks. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 AllocFreeDelta = 0;
+
+	/** All registered LLM tags. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	TArray<FBridgePerfAllocTag> Tags;
+
+	/** True when Analyze + provider read succeeded. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bSuccess = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString Error;
+};
+
 /**
  * Structured performance snapshots for UnrealBridge. Replaces parsing
  * `stat unit` text output. All values are read from engine globals + platform
@@ -1391,4 +1479,28 @@ public:
 		int32 TopN = 20,
 		int32 TopNPerThread = 10,
 		int32 TopNCounters = 100);
+
+	/**
+	 * Parse a `.utrace` file's allocation provider into a structured summary
+	 * (M6-1). Trace must contain the `memalloc` channel; without it the
+	 * AllocationsProvider exists but has no events and the call returns
+	 * `bHasEvents=false` with all aggregates at 0.
+	 *
+	 * Aggregates: peak total allocated memory + peak live allocations (from
+	 * the alloc-provider timelines), total alloc / free event counts, alloc
+	 * minus free delta, and the full LLM tag inventory.
+	 *
+	 * Per-allocation top-N "unfreed by size + callstack" requires the alloc
+	 * provider's async StartQuery / PollQuery machinery and is deferred to
+	 * a later commit. This MVP is enough to detect "did the run leak", peak
+	 * memory commit, and which subsystem tags are registered.
+	 *
+	 * Cost: dominated by Analyze() — alloc traces are large (1 GB activity
+	 * = several GB trace). Cap on trace file size enforced by caller's disk
+	 * budget; Analyze is synchronous and blocks the bridge exec.
+	 *
+	 * @param UtracePath  Absolute path to a `.utrace` file. Must exist.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static FBridgePerfAllocSummary ParseAllocTraceToSummary(const FString& UtracePath);
 };
