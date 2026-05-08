@@ -88,4 +88,22 @@ FBridgeInsightsLaunchResult UUnrealBridgePerfLibrary::BeginInsightsForTrace(cons
 	return FBridgeInsightsLaunchResult{};
 }
 
+bool UUnrealBridgePerfLibrary::BeginAutoHitchCapture(float ThresholdMs, int32 MaxEntries)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePerfLibrary::BeginAutoHitchCapture requires UE 5.7+ — call ignored on this engine version"));
+	return false;
+}
+
+TArray<FBridgeAutoHitchEntry> UUnrealBridgePerfLibrary::EndAutoHitchCapture()
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePerfLibrary::EndAutoHitchCapture requires UE 5.7+ — call ignored on this engine version"));
+	return TArray<FBridgeAutoHitchEntry>{};
+}
+
+FBridgeAutoHitchState UUnrealBridgePerfLibrary::GetAutoHitchState()
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePerfLibrary::GetAutoHitchState requires UE 5.7+ — call ignored on this engine version"));
+	return FBridgeAutoHitchState{};
+}
+
 #endif // UE_VERSION_OLDER_THAN(5, 7, 0)

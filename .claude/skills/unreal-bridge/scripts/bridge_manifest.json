@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-05-08T17:10:28+00:00",
+  "generated_at": "2026-05-08T17:13:50+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -17311,6 +17311,24 @@
           ],
           "returns": "BridgeAllMaterialsAnalysis"
         },
+        "begin_auto_hitch_capture": {
+          "doc": "X.begin_auto_hitch_capture(threshold_ms=50.000000, max_entries=100) -> bool",
+          "params": [
+            {
+              "default": "50.000000",
+              "has_default": true,
+              "name": "threshold_ms",
+              "type": ""
+            },
+            {
+              "default": "100",
+              "has_default": true,
+              "name": "max_entries",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
         "begin_insights_for_trace": {
           "doc": "X.begin_insights_for_trace(utrace_path) -> BridgeInsightsLaunchResult",
           "params": [
@@ -17351,6 +17369,11 @@
             }
           ],
           "returns": "BridgePerfSnapshotDelta"
+        },
+        "end_auto_hitch_capture": {
+          "doc": "X.end_auto_hitch_capture() -> Array[BridgeAutoHitchEntry]",
+          "params": [],
+          "returns": "Array[BridgeAutoHitchEntry]"
         },
         "export_perf_samples_to_csv": {
           "doc": "X.export_perf_samples_to_csv(output_path) -> bool",
@@ -17417,6 +17440,11 @@
             }
           ],
           "returns": "Array[BridgePerfBreakdownRow]"
+        },
+        "get_auto_hitch_state": {
+          "doc": "X.get_auto_hitch_state() -> BridgeAutoHitchState",
+          "params": [],
+          "returns": "BridgeAutoHitchState"
         },
         "get_frame_time_histogram": {
           "doc": "X.get_frame_time_histogram(bucket_ms=5.000000, max_bucket_ms=100.000000) -> Array[BridgeHistogramBucket]",
@@ -20145,6 +20173,26 @@
       "base_value",
       "current_value",
       "found"
+    ],
+    "BridgeAutoHitchEntry": [
+      "draw_calls",
+      "frame_number",
+      "game_thread_ms",
+      "gpu_ms",
+      "peak_used_physical_mb",
+      "primitives_drawn",
+      "render_thread_ms",
+      "timestamp_seconds",
+      "timestamp_utc",
+      "total_ms",
+      "used_physical_mb"
+    ],
+    "BridgeAutoHitchState": [
+      "active",
+      "entries_buffered",
+      "max_entries",
+      "started_at_utc",
+      "threshold_ms"
     ],
     "BridgeBlendProfileEntry": [
       "blend_scale",

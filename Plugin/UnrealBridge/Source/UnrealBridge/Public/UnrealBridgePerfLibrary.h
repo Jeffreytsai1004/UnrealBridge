@@ -608,6 +608,71 @@ struct FBridgePerfHotScope
 	int32 CallCount = 0;
 };
 
+/** One auto-captured hitch with rich perf state attached (M8-1). */
+USTRUCT(BlueprintType)
+struct FBridgeAutoHitchEntry
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 FrameNumber = 0;
+
+	/** `FApp::GetCurrentTime()` value at capture, seconds since launch. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	double TimestampSeconds = 0.0;
+
+	/** ISO-8601 UTC timestamp at capture for human-readable logs. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString TimestampUtc;
+
+	/** Wall-clock frame total, ms. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float TotalMs = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float GameThreadMs = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float RenderThreadMs = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float GpuMs = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 UsedPhysicalMb = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 PeakUsedPhysicalMb = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 DrawCalls = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 PrimitivesDrawn = 0;
+};
+
+/** Status of the auto-hitch capture (M8-1). */
+USTRUCT(BlueprintType)
+struct FBridgeAutoHitchState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bActive = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	float ThresholdMs = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 EntriesBuffered = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 MaxEntries = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString StartedAtUtc;
+};
+
 /** Result of `begin_insights_for_trace` (M8-3). */
 USTRUCT(BlueprintType)
 struct FBridgeInsightsLaunchResult
@@ -2158,4 +2223,36 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
 	static FBridgeInsightsLaunchResult BeginInsightsForTrace(const FString& UtracePath);
+
+	/**
+	 * Start the auto-hitch capture (M8-1). Hooks `OnEndFrame` and, on every
+	 * frame whose total time ≥ `ThresholdMs`, buffers a rich entry with
+	 * frame-time breakdown + memory + draw-call counts. Idempotent: calling
+	 * while already active discards the prior buffer and restarts with the
+	 * new threshold / cap.
+	 *
+	 * Roadmap calls for ring-buffer trace + screenshot attachment per hitch.
+	 * UE 5.7 has no native trace ring-buffer (would require hacking
+	 * FTraceAuxiliary::Pause/Resume + short rolling files) and screenshot
+	 * write inside OnEndFrame is itself hitch-inducing — both deferred.
+	 * This MVP buffers a structured perf snapshot per hitch which is enough
+	 * for "what was the editor doing when frame X spiked".
+	 *
+	 * @param ThresholdMs  Min total frame time (ms) for an entry to be logged.
+	 *                     Clamped to [10, 5000].
+	 * @param MaxEntries   Ring-buffer cap (oldest dropped first). Clamped [1, 1000].
+	 * @return             True on successful hook registration.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static bool BeginAutoHitchCapture(float ThresholdMs = 50.f, int32 MaxEntries = 100);
+
+	/** Stop the auto-hitch capture (M8-1) and return all buffered entries.
+	 *  Safe to call when inactive — returns whatever was previously buffered
+	 *  (typically empty after the prior EndAutoHitchCapture drained it). */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static TArray<FBridgeAutoHitchEntry> EndAutoHitchCapture();
+
+	/** Query auto-hitch capture state (M8-1). */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static FBridgeAutoHitchState GetAutoHitchState();
 };

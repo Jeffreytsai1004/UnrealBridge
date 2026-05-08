@@ -365,6 +365,51 @@ UnrealEditor-Cmd.exe MyGame.uproject -run=Cook -targetplatform=Windows -trace=co
 
 ---
 
+## begin_auto_hitch_capture(threshold_ms=50, max_entries=100) -> bool
+
+**(M8-1)** Start the auto-hitch capture. Hooks `OnEndFrame` and, on every frame whose total time ≥ `threshold_ms`, buffers a rich entry with frame-time breakdown + memory + draw-call counts. Idempotent — calling while active discards the prior buffer and restarts.
+
+**Roadmap reality check** — the original M8-1 brief called for ring-buffer trace + screenshot attachment per hitch. UE 5.7 has no native trace ring-buffer (would require hacking `FTraceAuxiliary::Pause/Resume` + short rolling files) and a synchronous screenshot write inside `OnEndFrame` is itself hitch-inducing. Both deferred to a future revision; this MVP buffers a structured perf snapshot per hitch which is enough for "what was the editor doing when frame X spiked".
+
+**Parameters**
+- `threshold_ms` (float): clamped to `[10, 5000]`.
+- `max_entries` (int32): ring-buffer cap (oldest dropped first). Clamped `[1, 1000]`.
+
+**Returns** — `True` once the hook is registered.
+
+## end_auto_hitch_capture() -> array of FBridgeAutoHitchEntry
+
+Stop the capture and return the buffer (also drains it). Safe to call when inactive (returns whatever was previously buffered, typically empty).
+
+### `FBridgeAutoHitchEntry`
+
+| Field | Type | Notes |
+|---|---|---|
+| `frame_number` | int64 | `GFrameCounter` value at capture. |
+| `timestamp_seconds` | double | `FApp::GetCurrentTime()`. |
+| `timestamp_utc` | str | ISO-8601 capture time. |
+| `total_ms` | float | Wall-clock frame time. |
+| `game_thread_ms` / `render_thread_ms` / `gpu_ms` | float | Per-thread breakdown. |
+| `used_physical_mb` / `peak_used_physical_mb` | int64 | Process RSS at hitch. |
+| `draw_calls` / `primitives_drawn` | int32 | Render counters at hitch. |
+
+## get_auto_hitch_state() -> FBridgeAutoHitchState
+
+Query active flag, threshold, buffered count, max-entries cap and start timestamp.
+
+**Example**
+```python
+import unreal
+unreal.UnrealBridgePerfLibrary.begin_auto_hitch_capture(50.0, 100)
+# ... PIE + camera fly-through for some duration ...
+hitches = unreal.UnrealBridgePerfLibrary.end_auto_hitch_capture()
+worst = sorted(hitches, key=lambda h: h.total_ms, reverse=True)[:5]
+for h in worst:
+    print(f"{h.timestamp_utc}  {h.total_ms:.0f}ms  gt={h.game_thread_ms:.0f}  draws={h.draw_calls}  mem={h.used_physical_mb}MiB")
+```
+
+---
+
 ## begin_insights_for_trace(utrace_path) -> FBridgeInsightsLaunchResult
 
 **(M8-3)** Launch UnrealInsights.exe on a `.utrace` file. Detached — the call returns as soon as the process is created; Insights runs in its own window. Use when `parse_*_trace_to_summary` isn't enough and a human needs to take over with the visual timeline.

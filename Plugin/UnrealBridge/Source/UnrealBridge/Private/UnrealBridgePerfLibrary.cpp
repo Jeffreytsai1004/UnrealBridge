@@ -1413,6 +1413,13 @@ namespace BridgePerfFrameHook
 	static double LastFrameStartSeconds = 0.0;
 	static bool bHasPriorFrame = false;
 
+	// ── M8-1 auto-hitch capture state ──
+	static bool bAutoHitchActive = false;
+	static float AutoHitchThresholdMs = 50.f;
+	static int32 AutoHitchMaxEntries = 100;
+	static FString AutoHitchStartedAtUtc;
+	static TArray<FBridgeAutoHitchEntry> AutoHitchBuffer;
+
 	static void OnEndFrame()
 	{
 		// Compute frame duration from the FApp wall clock. FApp::GetCurrentTime()
@@ -1466,6 +1473,48 @@ namespace BridgePerfFrameHook
 			while (Hitches.Num() > MaxHitchEntries)
 			{
 				Hitches.RemoveAt(0, /*Count*/ 1, /*EAllowShrinking*/ EAllowShrinking::No);
+			}
+		}
+
+		// M8-1 auto-hitch capture: independent threshold + richer state.
+		if (bAutoHitchActive && FrameMs >= AutoHitchThresholdMs)
+		{
+			FBridgeAutoHitchEntry AH;
+			AH.FrameNumber       = static_cast<int64>(GFrameCounter);
+			AH.TimestampSeconds  = Now;
+			AH.TimestampUtc      = FDateTime::UtcNow().ToIso8601();
+			AH.TotalMs           = FrameMs;
+			AH.GameThreadMs      = FPlatformTime::ToMilliseconds(GGameThreadTime);
+			AH.RenderThreadMs    = FPlatformTime::ToMilliseconds(GRenderThreadTime);
+			{
+				uint32 GpuCycles = 0;
+				for (uint32 i = 0; i < GNumExplicitGPUsForRendering; ++i)
+				{
+					GpuCycles += RHIGetGPUFrameCycles(i);
+				}
+				AH.GpuMs = FPlatformTime::ToMilliseconds(GpuCycles);
+			}
+			{
+				const FPlatformMemoryStats Stats = FPlatformMemory::GetStats();
+				AH.UsedPhysicalMb     = static_cast<int64>(Stats.UsedPhysical / (1024ull * 1024ull));
+				AH.PeakUsedPhysicalMb = static_cast<int64>(Stats.PeakUsedPhysical / (1024ull * 1024ull));
+			}
+			{
+				int32 DrawCalls = 0;
+				int32 Prims     = 0;
+				for (uint32 i = 0; i < GNumExplicitGPUsForRendering; ++i)
+				{
+					DrawCalls += GNumDrawCallsRHI[i];
+					Prims     += GNumPrimitivesDrawnRHI[i];
+				}
+				AH.DrawCalls       = DrawCalls;
+				AH.PrimitivesDrawn = Prims;
+			}
+
+			AutoHitchBuffer.Add(MoveTemp(AH));
+			while (AutoHitchBuffer.Num() > AutoHitchMaxEntries)
+			{
+				AutoHitchBuffer.RemoveAt(0, /*Count*/ 1, /*EAllowShrinking*/ EAllowShrinking::No);
 			}
 		}
 	}
@@ -1631,6 +1680,43 @@ void UUnrealBridgePerfLibrary::ResetFrameTimeHistogram()
 void UUnrealBridgePerfLibrary::ClearHitchLog()
 {
 	BridgePerfFrameHook::ClearHitches();
+}
+
+// ─── M8-1: Auto-hitch capture ───────────────────────────────
+
+bool UUnrealBridgePerfLibrary::BeginAutoHitchCapture(float ThresholdMs, int32 MaxEntries)
+{
+	const float ClampedThreshold = FMath::Clamp(ThresholdMs, 10.f, 5000.f);
+	const int32 ClampedMax       = FMath::Clamp(MaxEntries, 1, 1000);
+
+	FScopeLock L(&BridgePerfFrameHook::State_Lock);
+	BridgePerfFrameHook::bAutoHitchActive    = true;
+	BridgePerfFrameHook::AutoHitchThresholdMs = ClampedThreshold;
+	BridgePerfFrameHook::AutoHitchMaxEntries = ClampedMax;
+	BridgePerfFrameHook::AutoHitchStartedAtUtc = FDateTime::UtcNow().ToIso8601();
+	BridgePerfFrameHook::AutoHitchBuffer.Reset();
+	return true;
+}
+
+TArray<FBridgeAutoHitchEntry> UUnrealBridgePerfLibrary::EndAutoHitchCapture()
+{
+	FScopeLock L(&BridgePerfFrameHook::State_Lock);
+	BridgePerfFrameHook::bAutoHitchActive = false;
+	TArray<FBridgeAutoHitchEntry> Out = BridgePerfFrameHook::AutoHitchBuffer;
+	BridgePerfFrameHook::AutoHitchBuffer.Reset();
+	return Out;
+}
+
+FBridgeAutoHitchState UUnrealBridgePerfLibrary::GetAutoHitchState()
+{
+	FBridgeAutoHitchState Out;
+	FScopeLock L(&BridgePerfFrameHook::State_Lock);
+	Out.bActive          = BridgePerfFrameHook::bAutoHitchActive;
+	Out.ThresholdMs      = BridgePerfFrameHook::AutoHitchThresholdMs;
+	Out.EntriesBuffered  = BridgePerfFrameHook::AutoHitchBuffer.Num();
+	Out.MaxEntries       = BridgePerfFrameHook::AutoHitchMaxEntries;
+	Out.StartedAtUtc     = BridgePerfFrameHook::AutoHitchStartedAtUtc;
+	return Out;
 }
 
 // ─── M5-4: GetFrameTimePercentiles ──────────────────────────

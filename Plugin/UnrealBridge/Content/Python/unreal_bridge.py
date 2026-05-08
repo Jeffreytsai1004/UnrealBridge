@@ -16,7 +16,7 @@ structural rather than mnemonic.
 
 import unreal
 
-_GENERATED_AT = '2026-05-08T17:10:28+00:00'
+_GENERATED_AT = '2026-05-08T17:13:50+00:00'
 _UE_VERSION = '5.7.1-48512491+++UE5+Release-5.7'
 
 class Anim:
@@ -4588,6 +4588,11 @@ class Perf:
         return unreal.UnrealBridgePerfLibrary.analyze_all_materials(top_n)
 
     @staticmethod
+    def begin_auto_hitch_capture(*, threshold_ms=50.000000, max_entries=100):
+        """X.begin_auto_hitch_capture(threshold_ms=50.000000, max_entries=100) -> bool"""
+        return unreal.UnrealBridgePerfLibrary.begin_auto_hitch_capture(threshold_ms, max_entries)
+
+    @staticmethod
     def begin_insights_for_trace(*, utrace_path):
         """X.begin_insights_for_trace(utrace_path) -> BridgeInsightsLaunchResult"""
         return unreal.UnrealBridgePerfLibrary.begin_insights_for_trace(utrace_path)
@@ -4601,6 +4606,11 @@ class Perf:
     def compare_perf_snapshots(*, before, after, regression_threshold=0.100000):
         """X.compare_perf_snapshots(before, after, regression_threshold=0.100000) -> BridgePerfSnapshotDelta"""
         return unreal.UnrealBridgePerfLibrary.compare_perf_snapshots(before, after, regression_threshold)
+
+    @staticmethod
+    def end_auto_hitch_capture():
+        """X.end_auto_hitch_capture() -> Array[BridgeAutoHitchEntry]"""
+        return unreal.UnrealBridgePerfLibrary.end_auto_hitch_capture()
 
     @staticmethod
     def export_perf_samples_to_csv(*, output_path):
@@ -4621,6 +4631,11 @@ class Perf:
     def get_audio_memory_breakdown(*, group_by="compression_format", mode="disk", max_groups=50):
         """X.get_audio_memory_breakdown(group_by="compression_format", mode="disk", max_groups=50) -> Array[BridgePerfBreakdownRow]"""
         return unreal.UnrealBridgePerfLibrary.get_audio_memory_breakdown(group_by, mode, max_groups)
+
+    @staticmethod
+    def get_auto_hitch_state():
+        """X.get_auto_hitch_state() -> BridgeAutoHitchState"""
+        return unreal.UnrealBridgePerfLibrary.get_auto_hitch_state()
 
     @staticmethod
     def get_frame_time_histogram(*, bucket_ms=5.000000, max_bucket_ms=100.000000):
