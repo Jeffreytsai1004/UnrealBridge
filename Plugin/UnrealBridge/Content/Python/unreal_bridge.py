@@ -16,7 +16,7 @@ structural rather than mnemonic.
 
 import unreal
 
-_GENERATED_AT = '2026-05-08T16:47:57+00:00'
+_GENERATED_AT = '2026-05-08T16:50:41+00:00'
 _UE_VERSION = '5.7.1-48512491+++UE5+Release-5.7'
 
 class Anim:
@@ -4666,6 +4666,11 @@ class Perf:
     def get_render_counters():
         """X.get_render_counters() -> BridgeRenderCounters"""
         return unreal.UnrealBridgePerfLibrary.get_render_counters()
+
+    @staticmethod
+    def get_render_target_memory(*, top_n=30):
+        """X.get_render_target_memory(top_n=30) -> BridgeRenderTargetMemory"""
+        return unreal.UnrealBridgePerfLibrary.get_render_target_memory(top_n)
 
     @staticmethod
     def get_shadow_caster_breakdown(*, top_n=30):

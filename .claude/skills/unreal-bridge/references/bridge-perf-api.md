@@ -220,6 +220,30 @@ for row in s.u_objects.top_classes[:5]:
 
 ---
 
+## get_render_target_memory(top_n=30) -> FBridgeRenderTargetMemory
+
+**(M7-2)** Aggregate memory of `UTextureRenderTarget*` objects in memory. Walks `TObjectIterator<UTexture>` filtering by `IsA<UTextureRenderTarget>` (the abstract base doesn't iterate directly).
+
+| Top-level field | Type | Notes |
+|---|---|---|
+| `total_bytes` | int64 | Sum across all RTs walked. |
+| `render_target_count` | int32 | Number of RTs surfaced. |
+| `render_target2d_bytes` / `render_target_cube_bytes` / `render_target2d_array_bytes` / `render_target_volume_bytes` | int64 | Per-subclass totals. |
+| `entries` | array of `FBridgeRenderTargetEntry` | Top-N by `bytes` desc. |
+
+### `FBridgeRenderTargetEntry`
+
+| Field | Type | Notes |
+|---|---|---|
+| `path` | str | Asset path. |
+| `type_name` | str | Class short name. |
+| `width` / `height` / `depth` | int32 | Volume / cube / 2DArray use `depth` for slices/faces (1 for 2D, 6 for cube). |
+| `bytes` | int64 | `GetResourceSizeBytes(EstimatedTotal)`. |
+
+**Scope** — surfaces user-created + editor RTs only (`UTextureRenderTarget*` UObjects). **Does NOT cover** engine-internal RTs: GBuffer, shadow atlas, Lumen surface cache, virtual-texture pool, lighting cache. Those live inside the renderer module's private `FScene` state and require renderer-module access (out of scope for the bridge plugin). Use `stat scenerendertargets` or Insights for engine-internal RT memory.
+
+---
+
 ## get_texture_streaming_residency(top_n=30) -> FBridgeTextureStreamingState
 
 **(M7-1)** Top-N streaming textures by resident GPU bytes + global pool stats. Walks every UTexture2D via `TObjectIterator` on the GameThread; reads `GetStreamableResourceState()` for resident / wanted / max LOD counts and walks `PlatformData->Mips[*].BulkData` for cumulative byte sizes. Pool stats come from `IRenderAssetStreamingManager`.

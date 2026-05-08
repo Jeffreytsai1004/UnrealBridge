@@ -939,6 +939,73 @@ struct FBridgeTextureStreamingRow
 	bool bForceResident = false;
 };
 
+/** One render-target entry (M7-2). */
+USTRUCT(BlueprintType)
+struct FBridgeRenderTargetEntry
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString Path;
+
+	/** Class short name: "TextureRenderTarget2D" / "TextureRenderTargetCube" / etc. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString TypeName;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 Width = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 Height = 0;
+
+	/** Volume / array depth. 1 for 2d, 6 for cube, N for 2d-array, N for volume. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 Depth = 1;
+
+	/** Estimated bytes from `GetResourceSizeBytes(EstimatedTotal)`. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 Bytes = 0;
+};
+
+/**
+ * Result of `get_render_target_memory` (M7-2).
+ *
+ * Walks `UTextureRenderTarget*` objects via TObjectIterator. Engine-internal
+ * RTs (GBuffer, shadow atlas, Lumen surface cache, virtual-texture pool,
+ * lighting cache) live inside the renderer module's private FScene state and
+ * are NOT visible from here. This pass surfaces user-created / Blueprint RTs
+ * + the editor's CanvasRTs — the things an agent can attribute to its own
+ * code. For engine-internal RT memory, use `stat scenerendertargets` /
+ * Insights.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeRenderTargetMemory
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 TotalBytes = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 RenderTargetCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 RenderTarget2DBytes = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 RenderTargetCubeBytes = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 RenderTarget2DArrayBytes = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int64 RenderTargetVolumeBytes = 0;
+
+	/** Top-N entries by `bytes` desc. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	TArray<FBridgeRenderTargetEntry> Entries;
+};
+
 /** Result of `get_texture_streaming_residency` (M7-1). */
 USTRUCT(BlueprintType)
 struct FBridgeTextureStreamingState
@@ -1698,4 +1765,13 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
 	static FBridgeTextureStreamingState GetTextureStreamingResidency(int32 TopN = 30);
+
+	/**
+	 * Render-target memory aggregate (M7-2). See `FBridgeRenderTargetMemory`
+	 * for scope — this surfaces UTextureRenderTarget* objects via
+	 * TObjectIterator; engine-internal RTs (GBuffer, shadow atlas, Lumen
+	 * surface cache) live in renderer-private state and are NOT included.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static FBridgeRenderTargetMemory GetRenderTargetMemory(int32 TopN = 30);
 };

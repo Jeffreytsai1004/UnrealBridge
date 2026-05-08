@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-05-08T16:47:57+00:00",
+  "generated_at": "2026-05-08T16:50:41+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -17514,6 +17514,18 @@
           "params": [],
           "returns": "BridgeRenderCounters"
         },
+        "get_render_target_memory": {
+          "doc": "X.get_render_target_memory(top_n=30) -> BridgeRenderTargetMemory",
+          "params": [
+            {
+              "default": "30",
+              "has_default": true,
+              "name": "top_n",
+              "type": ""
+            }
+          ],
+          "returns": "BridgeRenderTargetMemory"
+        },
         "get_shadow_caster_breakdown": {
           "doc": "X.get_shadow_caster_breakdown(top_n=30) -> Array[BridgeActorRenderCost]",
           "params": [
@@ -21266,6 +21278,23 @@
       "draw_calls",
       "num_gpus",
       "primitives_drawn"
+    ],
+    "BridgeRenderTargetEntry": [
+      "bytes",
+      "depth",
+      "height",
+      "path",
+      "type_name",
+      "width"
+    ],
+    "BridgeRenderTargetMemory": [
+      "entries",
+      "render_target2d_array_bytes",
+      "render_target2d_bytes",
+      "render_target_count",
+      "render_target_cube_bytes",
+      "render_target_volume_bytes",
+      "total_bytes"
     ],
     "BridgeRenderedNode": [
       "graph_position",

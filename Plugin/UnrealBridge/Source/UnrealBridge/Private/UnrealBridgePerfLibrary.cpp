@@ -3015,6 +3015,11 @@ TArray<FBridgeTraceChannelInfo> UUnrealBridgePerfLibrary::ListTraceChannels()
 #include "TraceServices/Model/NetProfiler.h"
 #include "TraceServices/Containers/Tables.h"
 #include "Engine/Texture2D.h"
+#include "Engine/TextureRenderTarget.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Engine/TextureRenderTargetCube.h"
+#include "Engine/TextureRenderTarget2DArray.h"
+#include "Engine/TextureRenderTargetVolume.h"
 #include "Engine/StreamableRenderAsset.h"
 #include "ContentStreaming.h"
 #include "TextureResource.h"
@@ -3857,6 +3862,84 @@ FBridgeTextureStreamingState UUnrealBridgePerfLibrary::GetTextureStreamingReside
 	for (int32 i = 0; i < Take; ++i)
 	{
 		Out.Rows.Add(MoveTemp(AllRows[i]));
+	}
+
+	return Out;
+}
+
+// ─── M7-2 GetRenderTargetMemory ──────────────────────────────────
+
+FBridgeRenderTargetMemory UUnrealBridgePerfLibrary::GetRenderTargetMemory(int32 TopN)
+{
+	FBridgeRenderTargetMemory Out;
+	const int32 ClampedTopN = FMath::Clamp(TopN, 1, 1000);
+
+	TArray<FBridgeRenderTargetEntry> AllEntries;
+	AllEntries.Reserve(256);
+
+	// TObjectIterator<UTextureRenderTarget> returns nothing when the base is
+	// abstract on UE 5.7; walk UTexture instead and filter via IsA. UTexture
+	// is the closest concrete-enough ancestor that's still narrow.
+	for (TObjectIterator<UTexture> It; It; ++It)
+	{
+		UTextureRenderTarget* RT = Cast<UTextureRenderTarget>(*It);
+		if (!RT) continue;
+
+		FBridgeRenderTargetEntry E;
+		E.Path     = RT->GetPathName();
+		E.TypeName = RT->GetClass()->GetName();
+		E.Bytes    = static_cast<int64>(RT->GetResourceSizeBytes(EResourceSizeMode::EstimatedTotal));
+
+		if (UTextureRenderTarget2D* RT2D = Cast<UTextureRenderTarget2D>(RT))
+		{
+			E.Width  = RT2D->SizeX;
+			E.Height = RT2D->SizeY;
+			E.Depth  = 1;
+			Out.RenderTarget2DBytes += E.Bytes;
+		}
+		else if (UTextureRenderTargetCube* RTCube = Cast<UTextureRenderTargetCube>(RT))
+		{
+			E.Width  = RTCube->SizeX;
+			E.Height = RTCube->SizeX;
+			E.Depth  = 6;
+			Out.RenderTargetCubeBytes += E.Bytes;
+		}
+		else if (UTextureRenderTarget2DArray* RTArr = Cast<UTextureRenderTarget2DArray>(RT))
+		{
+			E.Width  = RTArr->SizeX;
+			E.Height = RTArr->SizeY;
+			E.Depth  = RTArr->Slices;
+			Out.RenderTarget2DArrayBytes += E.Bytes;
+		}
+		else if (UTextureRenderTargetVolume* RTVol = Cast<UTextureRenderTargetVolume>(RT))
+		{
+			E.Width  = RTVol->SizeX;
+			E.Height = RTVol->SizeY;
+			E.Depth  = RTVol->SizeZ;
+			Out.RenderTargetVolumeBytes += E.Bytes;
+		}
+		else
+		{
+			// Unrecognized RT subclass — still count its bytes in TotalBytes
+			// but leave dimensions as 0.
+		}
+
+		Out.TotalBytes += E.Bytes;
+		++Out.RenderTargetCount;
+		AllEntries.Add(MoveTemp(E));
+	}
+
+	AllEntries.Sort(
+		[](const FBridgeRenderTargetEntry& A, const FBridgeRenderTargetEntry& B)
+		{
+			return A.Bytes > B.Bytes;
+		});
+
+	const int32 Take = FMath::Min(AllEntries.Num(), ClampedTopN);
+	Out.Entries.Reserve(Take);
+	for (int32 i = 0; i < Take; ++i)
+	{
+		Out.Entries.Add(MoveTemp(AllEntries[i]));
 	}
 
 	return Out;

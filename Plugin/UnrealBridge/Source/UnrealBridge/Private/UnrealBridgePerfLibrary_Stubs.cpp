@@ -49,4 +49,10 @@ FBridgeTextureStreamingState UUnrealBridgePerfLibrary::GetTextureStreamingReside
 	return FBridgeTextureStreamingState{};
 }
 
+FBridgeRenderTargetMemory UUnrealBridgePerfLibrary::GetRenderTargetMemory(int32 TopN)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePerfLibrary::GetRenderTargetMemory requires UE 5.7+ — call ignored on this engine version"));
+	return FBridgeRenderTargetMemory{};
+}
+
 #endif // UE_VERSION_OLDER_THAN(5, 7, 0)
