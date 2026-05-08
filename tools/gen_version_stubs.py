@@ -45,7 +45,25 @@ TARGETS: list[dict] = [
     {"name": "UnrealBridgeBlueprintLibrary",      "scope": "function", "function": "AddAsyncActionNode"},
     {"name": "UnrealBridgeGameplayAbilityLibrary","scope": "function", "function": "AddAbilityTaskNode"},
     {"name": "UnrealBridgePerfLibrary",           "scope": "functions",
-        "functions": ["GetLumenDiagnostics", "GetNaniteStats", "ParseTraceToSummary"]},
+        "functions": [
+            "GetLumenDiagnostics", "GetNaniteStats",
+            # M4-5 + M5/M6/M7/M8: every UFUNCTION inside the
+            # `#if !UE_VERSION_OLDER_THAN(5, 7, 0)` block in
+            # UnrealBridgePerfLibrary.cpp lines 3089-4437. Functions outside
+            # that block (BeginAutoHitchCapture / EndAutoHitchCapture /
+            # GetAutoHitchState / GetFrameTimePercentiles) compile on every
+            # supported version and don't need stubs.
+            "ParseTraceToSummary",
+            "ParseAllocTraceToSummary",
+            "ParseNetTraceToSummary",
+            "ParseCookTraceToSummary",
+            "GetTextureStreamingResidency",
+            "GetRenderTargetMemory",
+            "GetPerPassGpuTimings",
+            "AnalyzeAllMaterials",
+            "ComparePerfSnapshots",
+            "BeginInsightsForTrace",
+        ]},
 ]
 
 # Class line: `class [UNREALBRIDGE_API] UFoo : public UBlueprintFunctionLibrary`.

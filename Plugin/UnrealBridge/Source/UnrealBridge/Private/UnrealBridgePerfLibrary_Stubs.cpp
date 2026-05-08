@@ -21,11 +21,7 @@ FBridgeNaniteStats UUnrealBridgePerfLibrary::GetNaniteStats()
 	return FBridgeNaniteStats{};
 }
 
-FBridgePerfTraceSummary UUnrealBridgePerfLibrary::ParseTraceToSummary(
-	const FString& UtracePath,
-	int32 TopN,
-	int32 TopNPerThread,
-	int32 TopNCounters)
+FBridgePerfTraceSummary UUnrealBridgePerfLibrary::ParseTraceToSummary(const FString& UtracePath, int32 TopN, int32 TopNPerThread, int32 TopNCounters)
 {
 	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePerfLibrary::ParseTraceToSummary requires UE 5.7+ — call ignored on this engine version"));
 	return FBridgePerfTraceSummary{};
@@ -73,10 +69,7 @@ FBridgePerfCookSummary UUnrealBridgePerfLibrary::ParseCookTraceToSummary(const F
 	return FBridgePerfCookSummary{};
 }
 
-FBridgePerfSnapshotDelta UUnrealBridgePerfLibrary::ComparePerfSnapshots(
-	const FBridgePerfSnapshot& Before,
-	const FBridgePerfSnapshot& After,
-	float RegressionThreshold)
+FBridgePerfSnapshotDelta UUnrealBridgePerfLibrary::ComparePerfSnapshots(const FBridgePerfSnapshot& Before, const FBridgePerfSnapshot& After, float RegressionThreshold)
 {
 	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePerfLibrary::ComparePerfSnapshots requires UE 5.7+ — call ignored on this engine version"));
 	return FBridgePerfSnapshotDelta{};
@@ -86,24 +79,6 @@ FBridgeInsightsLaunchResult UUnrealBridgePerfLibrary::BeginInsightsForTrace(cons
 {
 	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePerfLibrary::BeginInsightsForTrace requires UE 5.7+ — call ignored on this engine version"));
 	return FBridgeInsightsLaunchResult{};
-}
-
-bool UUnrealBridgePerfLibrary::BeginAutoHitchCapture(float ThresholdMs, int32 MaxEntries)
-{
-	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePerfLibrary::BeginAutoHitchCapture requires UE 5.7+ — call ignored on this engine version"));
-	return false;
-}
-
-TArray<FBridgeAutoHitchEntry> UUnrealBridgePerfLibrary::EndAutoHitchCapture()
-{
-	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePerfLibrary::EndAutoHitchCapture requires UE 5.7+ — call ignored on this engine version"));
-	return TArray<FBridgeAutoHitchEntry>{};
-}
-
-FBridgeAutoHitchState UUnrealBridgePerfLibrary::GetAutoHitchState()
-{
-	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePerfLibrary::GetAutoHitchState requires UE 5.7+ — call ignored on this engine version"));
-	return FBridgeAutoHitchState{};
 }
 
 #endif // UE_VERSION_OLDER_THAN(5, 7, 0)
