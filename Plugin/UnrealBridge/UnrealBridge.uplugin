@@ -37,6 +37,10 @@
 		{
 			"Name": "Chooser",
 			"Enabled": true
+		},
+		{
+			"Name": "GeometryScripting",
+			"Enabled": true
 		}
 	]
 }
