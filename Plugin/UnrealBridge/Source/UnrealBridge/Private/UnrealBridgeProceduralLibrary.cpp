@@ -23,6 +23,7 @@
 #include "GameFramework/Volume.h"
 #include "Engine/Texture2D.h"
 #include "TextureResource.h"
+#include "Misc/EngineVersionComparison.h"
 
 #define LOCTEXT_NAMESPACE "UnrealBridgeProcedural"
 
@@ -1454,8 +1455,17 @@ TArray<int32> UUnrealBridgeProceduralLibrary::AddInstancesByTransforms(
 	// optimisation) and you can't update/remove these instances later without it.
 	// bUpdateNavigation=false defers nav rebuild to a single end-of-batch
 	// RebuildProceduralNavigation call (M3-6) — see plan §6 #2.
+#if !UE_VERSION_OLDER_THAN(5, 4, 0)
+	// 5.4+ added the bUpdateNavigation overload, letting us defer nav rebuild
+	// to a single end-of-batch call.
 	Out = ISMC->AddInstances(Xs, /*bShouldReturnIndices=*/true,
 		bWorldSpace, /*bUpdateNavigation=*/false);
+#else
+	// 5.3 only has 3-arg AddInstances; nav rebuild is unconditional per call.
+	// The M3-6 RebuildProceduralNavigation downstream call still works — it's
+	// just less efficient on 5.3 (we can't suppress the per-call rebuild).
+	Out = ISMC->AddInstances(Xs, /*bShouldReturnIndices=*/true, bWorldSpace);
+#endif
 
 	return Out;
 }
