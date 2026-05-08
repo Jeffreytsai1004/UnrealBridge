@@ -250,14 +250,40 @@ bool UUnrealBridgePCGLibrary::SetPCGComponentOverride(
 		{
 			continue;
 		}
-		void* Addr = Desc.CachedProperty->ContainerPtrToValuePtr<void>(Memory);
-		const TCHAR* Cursor = *ExportedValue;
-		const TCHAR* Parsed = Desc.CachedProperty->ImportText_Direct(Cursor, Addr, /*Parent=*/nullptr, PPF_None);
-		if (!Parsed)
+		// Reject empty input. UE's ImportText silently accepts "" on numeric
+		// properties and writes zero — caller must use the property's exported
+		// "empty" form (e.g. `""` for FString, not the empty Python string).
+		if (ExportedValue.IsEmpty())
 		{
 			UE_LOG(LogTemp, Warning,
-				TEXT("UnrealBridge|PCG: ImportText failed for '%s' = '%s' (type=%s)"),
-				*Name, *ExportedValue, *Desc.CachedProperty->GetCPPType());
+				TEXT("UnrealBridge|PCG: empty value rejected for '%s' (type=%s)"),
+				*Name, *Desc.CachedProperty->GetCPPType());
+			return false;
+		}
+
+		void* Addr = Desc.CachedProperty->ContainerPtrToValuePtr<void>(Memory);
+
+		// Snapshot the current value so we can restore on parse failure. UE's
+		// FDoubleProperty / FFloatProperty / FIntProperty silently accept garbage:
+		// they return the input pointer unchanged (non-null) and write zero to the
+		// target. Without snapshot+restore, even when we detect the failure via
+		// "no characters consumed", the target value has already been zeroed.
+		FString OriginalExport;
+		Desc.CachedProperty->ExportText_Direct(OriginalExport, Addr, Addr, /*Parent=*/nullptr, PPF_None);
+
+		const TCHAR* Cursor = *ExportedValue;
+		const TCHAR* Parsed = Desc.CachedProperty->ImportText_Direct(Cursor, Addr, /*Parent=*/nullptr, PPF_None);
+
+		const bool bConsumedNothing = (Parsed == Cursor);
+		if (!Parsed || bConsumedNothing)
+		{
+			// Restore the pre-write value via ImportText of the snapshot.
+			const TCHAR* OrigCursor = *OriginalExport;
+			Desc.CachedProperty->ImportText_Direct(OrigCursor, Addr, /*Parent=*/nullptr, PPF_None);
+
+			UE_LOG(LogTemp, Warning,
+				TEXT("UnrealBridge|PCG: ImportText failed for '%s' = '%s' (type=%s); restored '%s'"),
+				*Name, *ExportedValue, *Desc.CachedProperty->GetCPPType(), *OriginalExport);
 			return false;
 		}
 		C->Modify();
