@@ -64,13 +64,15 @@ public class UnrealBridge : ModuleRules
 			"ChooserEditor",
 			"StructUtils",
 			// Geometry Script — Lane 2 of the procedural-content roadmap
-			// (UnrealBridgeGeometryLibrary). UDynamicMesh + the BP function
-			// libs (CopyMeshFromStaticMesh, ApplyMeshBoolean, etc.) live in
-			// these two runtime modules. The editor-only static-mesh asset
-			// creation (CreateNewStaticMeshAssetFromMesh) lives in a third
-			// module which we'll wire in once M4-4 needs it.
+			// (UnrealBridgeGeometryLibrary). UDynamicMesh + the runtime BP
+			// function libs (CopyMeshFromStaticMesh, ApplyMeshBoolean, etc.)
+			// live in GeometryScriptingCore / GeometryFramework; the editor-
+			// only asset-creation lib (CreateNewStaticMeshAssetFromMesh) is
+			// in GeometryScriptingEditor — UnrealBridge is editor-only so
+			// linking the editor module is fine.
 			"GeometryScriptingCore",
 			"GeometryFramework",
+			"GeometryScriptingEditor",
 			// TraceLog hosts UE::Trace::EnumerateChannels (used by M4-4
 			// list_trace_channels). Core publicly forwards TraceLog headers
 			// but the symbols are __declspec(dllimport) so a direct link

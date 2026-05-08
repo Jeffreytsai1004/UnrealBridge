@@ -4,16 +4,318 @@
 
 #if !UE_VERSION_OLDER_THAN(5, 7, 0)
 
-// Geometry Script API headers land in Phase 2 alongside the M4
-// handle-pool + asset-I/O UFUNCTIONs. This TU is intentionally empty
-// until then — Phase 1 only proves the new module dependencies wire up
-// without breaking the build.
+#include "UDynamicMesh.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/World.h"
+#include "Editor.h"                          // GEditor
+#include "Editor/EditorEngine.h"
+#include "EngineUtils.h"                     // TActorIterator
+#include "GameFramework/Actor.h"
+#include "Components/SceneComponent.h"
+#include "Materials/MaterialInterface.h"
+#include "UObject/StrongObjectPtr.h"
+#include "UObject/Package.h"
+#include "Misc/PackageName.h"
+
+#include "GeometryScript/GeometryScriptTypes.h"
+#include "GeometryScript/MeshAssetFunctions.h"
+#include "GeometryScript/MeshQueryFunctions.h"
+#include "GeometryScript/SceneUtilityFunctions.h"
+#include "GeometryScript/CreateNewAssetUtilityFunctions.h"
+
+#define LOCTEXT_NAMESPACE "UnrealBridgeGeometry"
 
 namespace BridgeGeometryImpl
 {
-	// Handle pool, asset resolvers, and string→enum mappers (boolean op,
-	// UV unwrap method, etc.) land here in Phase 2 / Phase 3. Use a named
-	// namespace per feedback_no_unnamed_namespace.
+	// Process-global handle pool. UDynamicMesh* held via TStrongObjectPtr so
+	// it survives GC until the caller releases the handle (pit #7 in roadmap).
+	// Indexed by monotonically-increasing int — never reused so stale handles
+	// fail loudly via the existence check rather than aliasing a fresh mesh.
+	struct FHandlePool
+	{
+		TMap<int32, TStrongObjectPtr<UDynamicMesh>> Map;
+		int32 NextHandle = 1;
+	};
+
+	FHandlePool& GetPool()
+	{
+		static FHandlePool Pool;
+		return Pool;
+	}
+
+	UDynamicMesh* ResolveHandle(int32 Handle)
+	{
+		FHandlePool& Pool = GetPool();
+		TStrongObjectPtr<UDynamicMesh>* Found = Pool.Map.Find(Handle);
+		if (!Found)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: handle %d is not registered"), Handle);
+			return nullptr;
+		}
+		UDynamicMesh* Mesh = Found->Get();
+		if (!Mesh)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: handle %d resolved to null (already collected)"), Handle);
+			return nullptr;
+		}
+		return Mesh;
+	}
+
+	UWorld* GetEditorWorld()
+	{
+		return GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	}
+
+	// Mirror UnrealBridgeLevelLibrary actor-lookup conventions: try FName first,
+	// then user-visible label. Editor world only.
+	AActor* FindActor(UWorld* World, const FString& NameOrLabel)
+	{
+		if (!World || NameOrLabel.IsEmpty())
+		{
+			return nullptr;
+		}
+		const FName AsName(*NameOrLabel);
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			AActor* A = *It;
+			if (!A)
+			{
+				continue;
+			}
+			if (A->GetFName() == AsName || A->GetActorLabel() == NameOrLabel)
+			{
+				return A;
+			}
+		}
+		return nullptr;
+	}
+
+	USceneComponent* FindComponent(AActor* Actor, const FString& ComponentName)
+	{
+		if (!Actor)
+		{
+			return nullptr;
+		}
+		if (ComponentName.IsEmpty())
+		{
+			return Actor->GetRootComponent();
+		}
+		const FName AsName(*ComponentName);
+		TArray<USceneComponent*> Components;
+		Actor->GetComponents<USceneComponent>(Components);
+		for (USceneComponent* C : Components)
+		{
+			if (C && (C->GetFName() == AsName || C->GetName() == ComponentName))
+			{
+				return C;
+			}
+		}
+		return nullptr;
+	}
 }
+
+int32 UUnrealBridgeGeometryLibrary::CreateDynamicMesh()
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* NewMesh = NewObject<UDynamicMesh>(GetTransientPackage());
+	if (!NewMesh)
+	{
+		UE_LOG(LogTemp, Error, TEXT("UnrealBridge|Geometry: NewObject<UDynamicMesh> returned null"));
+		return 0;
+	}
+	FHandlePool& Pool = GetPool();
+	const int32 Handle = Pool.NextHandle++;
+	Pool.Map.Add(Handle, TStrongObjectPtr<UDynamicMesh>(NewMesh));
+	return Handle;
+}
+
+bool UUnrealBridgeGeometryLibrary::ReleaseDynamicMesh(int32 Handle)
+{
+	using namespace BridgeGeometryImpl;
+	FHandlePool& Pool = GetPool();
+	return Pool.Map.Remove(Handle) > 0;
+}
+
+TArray<int32> UUnrealBridgeGeometryLibrary::ListDynamicMeshHandles()
+{
+	using namespace BridgeGeometryImpl;
+	TArray<int32> Out;
+	GetPool().Map.GenerateKeyArray(Out);
+	Out.Sort();
+	return Out;
+}
+
+bool UUnrealBridgeGeometryLibrary::LoadMeshFromStaticMesh(int32 Handle, const FString& AssetPath, int32 Lod)
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Target = ResolveHandle(Handle);
+	if (!Target)
+	{
+		return false;
+	}
+	UStaticMesh* Source = LoadObject<UStaticMesh>(nullptr, *AssetPath);
+	if (!Source)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: could not load StaticMesh '%s'"), *AssetPath);
+		return false;
+	}
+
+	FGeometryScriptCopyMeshFromAssetOptions Options;
+	FGeometryScriptMeshReadLOD RequestedLOD;
+	RequestedLOD.LODType  = EGeometryScriptLODType::SourceModel;
+	RequestedLOD.LODIndex = Lod;
+	EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
+
+	UGeometryScriptLibrary_StaticMeshFunctions::CopyMeshFromStaticMeshV2(
+		Source, Target, Options, RequestedLOD, Outcome,
+		/*bUseSectionMaterials=*/true, /*Debug=*/nullptr);
+
+	return Outcome == EGeometryScriptOutcomePins::Success;
+}
+
+bool UUnrealBridgeGeometryLibrary::LoadMeshFromComponent(const FString& ActorLabel, const FString& ComponentName, int32 Handle)
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Target = ResolveHandle(Handle);
+	if (!Target)
+	{
+		return false;
+	}
+	UWorld* World = GetEditorWorld();
+	AActor* Actor = FindActor(World, ActorLabel);
+	if (!Actor)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: actor '%s' not found in editor world"), *ActorLabel);
+		return false;
+	}
+	USceneComponent* Component = FindComponent(Actor, ComponentName);
+	if (!Component)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: component '%s' not found on actor '%s'"),
+			*ComponentName, *ActorLabel);
+		return false;
+	}
+
+	FGeometryScriptCopyMeshFromComponentOptions Options;
+	FTransform LocalToWorld = FTransform::Identity;
+	EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
+
+	UGeometryScriptLibrary_SceneUtilityFunctions::CopyMeshFromComponent(
+		Component, Target, Options,
+		/*bTransformToWorld=*/false, LocalToWorld, Outcome, /*Debug=*/nullptr);
+
+	return Outcome == EGeometryScriptOutcomePins::Success;
+}
+
+FString UUnrealBridgeGeometryLibrary::SaveMeshToNewStaticMesh(int32 Handle, const FString& NewAssetPath, const TArray<UMaterialInterface*>& MaterialList)
+{
+#if WITH_EDITOR
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Source = ResolveHandle(Handle);
+	if (!Source)
+	{
+		return FString{};
+	}
+
+	FGeometryScriptCreateNewStaticMeshAssetOptions Options;
+	// Defaults are conservative: don't recompute normals/tangents (caller can use
+	// M6-3 explicitly), Nanite off, collision on, default trace flag.
+	EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
+
+	UStaticMesh* NewAsset = UGeometryScriptLibrary_CreateNewAssetFunctions::CreateNewStaticMeshAssetFromMesh(
+		Source, NewAssetPath, Options, Outcome, /*Debug=*/nullptr);
+
+	if (Outcome != EGeometryScriptOutcomePins::Success || !NewAsset)
+	{
+		return FString{};
+	}
+
+	// Apply user-supplied materials. CreateNewStaticMeshAssetFromMesh leaves the
+	// MaterialSlot list with default material; we overwrite slot N with
+	// MaterialList[N] for as many entries as the caller supplied.
+	if (MaterialList.Num() > 0)
+	{
+		TArray<FStaticMaterial>& Slots = NewAsset->GetStaticMaterials();
+		for (int32 i = 0; i < MaterialList.Num() && i < Slots.Num(); ++i)
+		{
+			if (MaterialList[i])
+			{
+				Slots[i].MaterialInterface = MaterialList[i];
+			}
+		}
+		NewAsset->Modify();
+		NewAsset->MarkPackageDirty();
+	}
+
+	return NewAsset->GetPathName();
+#else
+	(void)Handle; (void)NewAssetPath; (void)MaterialList;
+	UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: SaveMeshToNewStaticMesh requires WITH_EDITOR"));
+	return FString{};
+#endif
+}
+
+bool UUnrealBridgeGeometryLibrary::SaveMeshToExistingStaticMesh(int32 Handle, const FString& ExistingAssetPath, bool bReplaceMaterials)
+{
+#if WITH_EDITOR
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Source = ResolveHandle(Handle);
+	if (!Source)
+	{
+		return false;
+	}
+	UStaticMesh* Target = LoadObject<UStaticMesh>(nullptr, *ExistingAssetPath);
+	if (!Target)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: could not load existing StaticMesh '%s'"), *ExistingAssetPath);
+		return false;
+	}
+
+	FGeometryScriptCopyMeshToAssetOptions Options;
+	Options.bReplaceMaterials       = bReplaceMaterials;
+	Options.bEmitTransaction        = true;
+	Options.bDeferMeshPostEditChange = false;
+
+	FGeometryScriptMeshWriteLOD TargetLOD;  // defaults: SourceModel LOD0
+	EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
+
+	UGeometryScriptLibrary_StaticMeshFunctions::CopyMeshToStaticMesh(
+		Source, Target, Options, TargetLOD, Outcome,
+		/*bUseSectionMaterials=*/true, /*Debug=*/nullptr);
+
+	if (Outcome != EGeometryScriptOutcomePins::Success)
+	{
+		return false;
+	}
+
+	Target->Modify();
+	Target->MarkPackageDirty();
+	return true;
+#else
+	(void)Handle; (void)ExistingAssetPath; (void)bReplaceMaterials;
+	UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: SaveMeshToExistingStaticMesh requires WITH_EDITOR"));
+	return false;
+#endif
+}
+
+FBridgeMeshInfo UUnrealBridgeGeometryLibrary::GetMeshInfo(int32 Handle)
+{
+	using namespace BridgeGeometryImpl;
+	FBridgeMeshInfo Info;
+	UDynamicMesh* Mesh = ResolveHandle(Handle);
+	if (!Mesh)
+	{
+		return Info;
+	}
+	Info.NumTriangles    = Mesh->GetTriangleCount();
+	Info.NumVertices     = UGeometryScriptLibrary_MeshQueryFunctions::GetVertexCount(Mesh);
+	Info.NumUVLayers     = UGeometryScriptLibrary_MeshQueryFunctions::GetNumUVSets(Mesh);
+	Info.bHasNormals     = UGeometryScriptLibrary_MeshQueryFunctions::GetHasTriangleNormals(Mesh);
+	Info.bHasVertexColors = UGeometryScriptLibrary_MeshQueryFunctions::GetHasVertexColors(Mesh);
+	Info.Bounds          = UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(Mesh);
+	return Info;
+}
+
+#undef LOCTEXT_NAMESPACE
 
 #endif // !UE_VERSION_OLDER_THAN(5, 7, 0)
