@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-05-08T16:55:03+00:00",
+  "generated_at": "2026-05-08T17:00:45+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -17299,6 +17299,18 @@
     },
     "UnrealBridgePerfLibrary": {
       "functions": {
+        "analyze_all_materials": {
+          "doc": "X.analyze_all_materials(top_n=30) -> BridgeAllMaterialsAnalysis",
+          "params": [
+            {
+              "default": "30",
+              "has_default": true,
+              "name": "top_n",
+              "type": ""
+            }
+          ],
+          "returns": "BridgeAllMaterialsAnalysis"
+        },
         "clear_hitch_log": {
           "doc": "X.clear_hitch_log() -> None",
           "params": [],
@@ -19960,6 +19972,11 @@
       "resolved_class",
       "success"
     ],
+    "BridgeAllMaterialsAnalysis": [
+      "rows",
+      "total_material_instances",
+      "total_materials"
+    ],
     "BridgeAnimBlueprintInfo": [
       "implemented_interfaces",
       "is_template",
@@ -20842,6 +20859,23 @@
       "path",
       "scalar_parameters",
       "vector_parameters"
+    ],
+    "BridgeMaterialPerfRow": [
+      "blend_mode",
+      "complexity_score",
+      "custom_expression_count",
+      "expression_count",
+      "material_domain",
+      "material_path",
+      "scalar_parameter_count",
+      "shading_model",
+      "static_switch_count",
+      "texture_parameter_count",
+      "texture_sample_count",
+      "two_sided",
+      "used_with_skeletal_mesh",
+      "used_with_static_lighting",
+      "vector_parameter_count"
     ],
     "BridgeMaterialRenderRow": [
       "material_path",

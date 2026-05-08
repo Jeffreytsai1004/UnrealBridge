@@ -61,4 +61,10 @@ FBridgeGpuPassTimings UUnrealBridgePerfLibrary::GetPerPassGpuTimings()
 	return FBridgeGpuPassTimings{};
 }
 
+FBridgeAllMaterialsAnalysis UUnrealBridgePerfLibrary::AnalyzeAllMaterials(int32 TopN)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePerfLibrary::AnalyzeAllMaterials requires UE 5.7+ — call ignored on this engine version"));
+	return FBridgeAllMaterialsAnalysis{};
+}
+
 #endif // UE_VERSION_OLDER_THAN(5, 7, 0)

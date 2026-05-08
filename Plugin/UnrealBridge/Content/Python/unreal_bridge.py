@@ -16,7 +16,7 @@ structural rather than mnemonic.
 
 import unreal
 
-_GENERATED_AT = '2026-05-08T16:55:03+00:00'
+_GENERATED_AT = '2026-05-08T17:00:45+00:00'
 _UE_VERSION = '5.7.1-48512491+++UE5+Release-5.7'
 
 class Anim:
@@ -4581,6 +4581,11 @@ class PCG:
 
 class Perf:
     """Wraps unreal.UnrealBridgePerfLibrary (kwargs-only)."""
+
+    @staticmethod
+    def analyze_all_materials(*, top_n=30):
+        """X.analyze_all_materials(top_n=30) -> BridgeAllMaterialsAnalysis"""
+        return unreal.UnrealBridgePerfLibrary.analyze_all_materials(top_n)
 
     @staticmethod
     def clear_hitch_log():

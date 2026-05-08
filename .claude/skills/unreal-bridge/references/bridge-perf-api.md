@@ -220,6 +220,36 @@ for row in s.u_objects.top_classes[:5]:
 
 ---
 
+## analyze_all_materials(top_n=30) -> FBridgeAllMaterialsAnalysis
+
+**(M7-4)** Walks every UMaterial master asset via AssetRegistry, loads each, counts expressions by class (TextureSample / Custom / StaticSwitch / parameter types) and surfaces the heaviest ones.
+
+| Top-level field | Type | Notes |
+|---|---|---|
+| `total_materials` | int32 | Master materials walked. |
+| `total_material_instances` | int32 | UMaterialInstance assets discovered (not analysed individually). |
+| `rows` | array of `FBridgeMaterialPerfRow` | Top-N by `complexity_score` desc. |
+
+### `FBridgeMaterialPerfRow`
+
+| Field | Type | Notes |
+|---|---|---|
+| `material_path` | str | Asset path. |
+| `blend_mode` / `shading_model` / `material_domain` | str | Pretty enum names (e.g. `"BLEND_Masked"`, `"MSM_DefaultLit"`). |
+| `two_sided` / `used_with_skeletal_mesh` / `used_with_static_lighting` | bool | Surface flags. |
+| `expression_count` | int32 | Total expression nodes in the material graph. |
+| `texture_sample_count` | int32 | Includes parameter variants (TextureSampleParameter2D etc). |
+| `custom_expression_count` | int32 | UMaterialExpressionCustom (HLSL inline). |
+| `static_switch_count` | int32 | UMaterialExpressionStaticSwitch* (compile-time branches). |
+| `scalar_parameter_count` / `vector_parameter_count` / `texture_parameter_count` | int32 | Parameter inventories. |
+| `complexity_score` | int32 | `expression_count + 4×texture_sample_count + 8×custom_expression_count`. Heuristic only — not a real GPU instruction count. |
+
+**Cost** — O(N) load + O(expressions) per material; loads materials that aren't already in memory. Can be slow on large projects (tens of seconds for thousands of materials).
+
+**Scope limitation** — does NOT report real GPU instruction counts. That requires `FMaterialStatsUtils::ExtractMatertialStatsInfo` which is internal to the Material Editor module's compile pipeline. The complexity_score is a structural heuristic that ranks the worst graphs first; for actual instruction counts open the asset in Material Editor and read the stats panel.
+
+---
+
 ## get_per_pass_gpu_timings() -> FBridgeGpuPassTimings
 
 **(M7-3)** Per-pass GPU timings via `FRealtimeGPUProfiler::FetchPerfByDescription`. One row per registered GPU stat scope (BasePass / ShadowDepths / Lumen / Translucency / PostProcess / etc.) with average / min / max ms over the profiler's rolling 64-frame history.

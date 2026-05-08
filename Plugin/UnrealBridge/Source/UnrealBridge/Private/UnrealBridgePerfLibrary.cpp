@@ -3024,6 +3024,9 @@ TArray<FBridgeTraceChannelInfo> UUnrealBridgePerfLibrary::ListTraceChannels()
 #include "ContentStreaming.h"
 #include "TextureResource.h"
 #include "ProfilingDebugging/RealtimeGPUProfiler.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialExpression.h"
+#include "MaterialEditingLibrary.h"
 #include "ProfilingDebugging/MiscTrace.h"  // ETraceFrameType
 
 namespace BridgePerfTraceImpl
@@ -4005,6 +4008,123 @@ FBridgeGpuPassTimings UUnrealBridgePerfLibrary::GetPerPassGpuTimings()
 	Out.bAvailable = false;
 	Out.Diagnostic = TEXT("RHI_NEW_GPU_PROFILER active or HAS_GPU_STATS off — use Insights with gpu+rdg channels");
 #endif
+
+	return Out;
+}
+
+// ─── M7-4 AnalyzeAllMaterials ─────────────────────────────────────
+
+FBridgeAllMaterialsAnalysis UUnrealBridgePerfLibrary::AnalyzeAllMaterials(int32 TopN)
+{
+	FBridgeAllMaterialsAnalysis Out;
+	const int32 ClampedTopN = FMath::Clamp(TopN, 1, 1000);
+
+	IAssetRegistry& AR = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+
+	TArray<FAssetData> MaterialAssets;
+	AR.GetAssetsByClass(UMaterial::StaticClass()->GetClassPathName(), MaterialAssets, /*bSearchSubClasses*/ true);
+
+	TArray<FAssetData> MaterialInstanceAssets;
+	AR.GetAssetsByClass(UMaterialInstance::StaticClass()->GetClassPathName(), MaterialInstanceAssets, /*bSearchSubClasses*/ true);
+	Out.TotalMaterialInstances = MaterialInstanceAssets.Num();
+
+	TArray<FBridgeMaterialPerfRow> AllRows;
+	AllRows.Reserve(MaterialAssets.Num());
+
+	for (const FAssetData& AD : MaterialAssets)
+	{
+		// Skip subclasses with their own type (we want UMaterial only — material
+		// instances are already excluded by the StaticClass GetClassPathName check
+		// since UMaterialInstance doesn't inherit from UMaterial; but other
+		// engine-derived UMaterial subclasses may exist).
+		UMaterial* Mat = Cast<UMaterial>(AD.GetAsset());
+		if (!Mat) continue;
+		++Out.TotalMaterials;
+
+		FBridgeMaterialPerfRow Row;
+		Row.MaterialPath          = Mat->GetPathName();
+		Row.bTwoSided             = Mat->TwoSided != 0;
+		Row.bUsedWithSkeletalMesh = Mat->bUsedWithSkeletalMesh != 0;
+		Row.bUsedWithStaticLighting = Mat->bUsedWithStaticLighting != 0;
+
+		if (const UEnum* BlendEnum = StaticEnum<EBlendMode>())
+		{
+			Row.BlendMode = BlendEnum->GetNameStringByValue(static_cast<int64>(Mat->BlendMode));
+		}
+		if (const UEnum* DomainEnum = StaticEnum<EMaterialDomain>())
+		{
+			Row.MaterialDomain = DomainEnum->GetNameStringByValue(static_cast<int64>(Mat->MaterialDomain));
+		}
+		// ShadingModels is a bitfield in 5.7; we surface the first set bit name.
+		if (const UEnum* SMEnum = StaticEnum<EMaterialShadingModel>())
+		{
+			const FMaterialShadingModelField Models = Mat->GetShadingModels();
+			for (int32 i = 0; i < MSM_NUM; ++i)
+			{
+				if (Models.HasShadingModel(static_cast<EMaterialShadingModel>(i)))
+				{
+					Row.ShadingModel = SMEnum->GetNameStringByValue(static_cast<int64>(i));
+					break;
+				}
+			}
+		}
+
+		// Walk every expression — use class-name string match to avoid extra
+		// header dependencies (TextureSample / Custom / StaticSwitch each
+		// lives in its own header). Counts include parameter variants
+		// (e.g. TextureSampleParameter2D matches "TextureSample").
+		for (TObjectPtr<UMaterialExpression> ExprPtr : Mat->GetExpressions())
+		{
+			UMaterialExpression* Expr = ExprPtr.Get();
+			if (!Expr) continue;
+			++Row.ExpressionCount;
+
+			const FString CN = Expr->GetClass()->GetName();
+			if (CN.Contains(TEXT("TextureSample")))
+			{
+				++Row.TextureSampleCount;
+				if (CN.Contains(TEXT("Parameter")))
+				{
+					++Row.TextureParameterCount;
+				}
+			}
+			else if (CN.Contains(TEXT("Custom")) && !CN.Contains(TEXT("CustomOutput")))
+			{
+				++Row.CustomExpressionCount;
+			}
+			else if (CN.Contains(TEXT("StaticSwitch")))
+			{
+				++Row.StaticSwitchCount;
+			}
+			else if (CN == TEXT("MaterialExpressionScalarParameter"))
+			{
+				++Row.ScalarParameterCount;
+			}
+			else if (CN == TEXT("MaterialExpressionVectorParameter"))
+			{
+				++Row.VectorParameterCount;
+			}
+		}
+
+		Row.ComplexityScore = Row.ExpressionCount
+			+ 4 * Row.TextureSampleCount
+			+ 8 * Row.CustomExpressionCount;
+
+		AllRows.Add(MoveTemp(Row));
+	}
+
+	AllRows.Sort(
+		[](const FBridgeMaterialPerfRow& A, const FBridgeMaterialPerfRow& B)
+		{
+			return A.ComplexityScore > B.ComplexityScore;
+		});
+
+	const int32 Take = FMath::Min(AllRows.Num(), ClampedTopN);
+	Out.Rows.Reserve(Take);
+	for (int32 i = 0; i < Take; ++i)
+	{
+		Out.Rows.Add(MoveTemp(AllRows[i]));
+	}
 
 	return Out;
 }

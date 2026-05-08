@@ -939,6 +939,86 @@ struct FBridgeTextureStreamingRow
 	bool bForceResident = false;
 };
 
+/**
+ * One material's structural-complexity row (M7-4). Reports counts of
+ * expressions / samplers / parameters that are derivable from the in-memory
+ * material graph without recompiling shaders. Real GPU instruction counts
+ * + sampler-slot pressure live behind `FMaterialStatsUtils::ExtractMatertialStatsInfo`
+ * which requires the `MaterialEditor` engine module — out of scope for the
+ * bridge plugin's lean dependency set.
+ */
+USTRUCT(BlueprintType)
+struct FBridgeMaterialPerfRow
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString MaterialPath;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString BlendMode;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString ShadingModel;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	FString MaterialDomain;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bTwoSided = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bUsedWithSkeletalMesh = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	bool bUsedWithStaticLighting = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 ExpressionCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 TextureSampleCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 CustomExpressionCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 StaticSwitchCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 ScalarParameterCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 VectorParameterCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 TextureParameterCount = 0;
+
+	/** A simple sortable cost proxy: ExpressionCount + 4×TextureSampleCount + 8×CustomExpressionCount.
+	 *  Not a real GPU cost — just a heuristic to surface the heaviest graphs at the top. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 ComplexityScore = 0;
+};
+
+/** Result of `analyze_all_materials` (M7-4). */
+USTRUCT(BlueprintType)
+struct FBridgeAllMaterialsAnalysis
+{
+	GENERATED_BODY()
+
+	/** Number of UMaterial master assets walked. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 TotalMaterials = 0;
+
+	/** Number of UMaterialInstance assets discovered (not analysed individually). */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	int32 TotalMaterialInstances = 0;
+
+	/** Top-N rows by `ComplexityScore` desc. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Perf")
+	TArray<FBridgeMaterialPerfRow> Rows;
+};
+
 /** One per-pass GPU timing row (M7-3). Microseconds → milliseconds for output. */
 USTRUCT(BlueprintType)
 struct FBridgeGpuPassTiming
@@ -1849,4 +1929,24 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
 	static FBridgeGpuPassTimings GetPerPassGpuTimings();
+
+	/**
+	 * Analyse every master material in the project and return the top-N by
+	 * structural complexity (M7-4). Walks AssetRegistry for UMaterial assets,
+	 * loads each one, counts expression nodes by class (TextureSample / Custom /
+	 * StaticSwitch / parameter types), reads blend mode / shading model /
+	 * domain / two-sided / skeletal-usage flags.
+	 *
+	 * Sort key is `ComplexityScore = ExpressionCount + 4×TextureSampleCount +
+	 * 8×CustomExpressionCount`. This is a cheap heuristic — for true GPU
+	 * instruction counts use the Material Editor's stats panel (requires
+	 * MaterialEditor module which is intentionally not a bridge dependency).
+	 *
+	 * Cost: O(N) load + O(expressions) per material. Loads materials that
+	 * weren't already in memory — can be slow on large projects (1-30s).
+	 *
+	 * @param TopN  Cap on row count (1..1000). Clamped.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Perf")
+	static FBridgeAllMaterialsAnalysis AnalyzeAllMaterials(int32 TopN = 30);
 };
