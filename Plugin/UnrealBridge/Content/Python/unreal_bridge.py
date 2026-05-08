@@ -16,7 +16,7 @@ structural rather than mnemonic.
 
 import unreal
 
-_GENERATED_AT = '2026-05-07T17:14:06+00:00'
+_GENERATED_AT = '2026-05-08T13:58:49+00:00'
 _UE_VERSION = '5.7.1-48512491+++UE5+Release-5.7'
 
 class Anim:
@@ -3424,6 +3424,150 @@ class GameplayTag:
         return unreal.UnrealBridgeGameplayTagLibrary.rename_gameplay_tag(old_tag, new_tag, rename_children)
 
 
+class Geometry:
+    """Wraps unreal.UnrealBridgeGeometryLibrary (kwargs-only)."""
+
+    @staticmethod
+    def append_box(*, handle, origin, size):
+        """X.append_box(handle, origin, size) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.append_box(handle, origin, size)
+
+    @staticmethod
+    def append_cone(*, handle, origin, base_radius, height, radial_segments):
+        """X.append_cone(handle, origin, base_radius, height, radial_segments) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.append_cone(handle, origin, base_radius, height, radial_segments)
+
+    @staticmethod
+    def append_cylinder(*, handle, origin, radius, height, radial_segments):
+        """X.append_cylinder(handle, origin, radius, height, radial_segments) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.append_cylinder(handle, origin, radius, height, radial_segments)
+
+    @staticmethod
+    def append_sphere(*, handle, origin, radius, resolution_uv):
+        """X.append_sphere(handle, origin, radius, resolution_uv) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.append_sphere(handle, origin, radius, resolution_uv)
+
+    @staticmethod
+    def bake_normals_to_texture(*, handle, new_texture_path, resolution):
+        """X.bake_normals_to_texture(handle, new_texture_path, resolution) -> str"""
+        return unreal.UnrealBridgeGeometryLibrary.bake_normals_to_texture(handle, new_texture_path, resolution)
+
+    @staticmethod
+    def bake_occlusion_to_vertex_color(*, handle, occlusion_rays=16):
+        """X.bake_occlusion_to_vertex_color(handle, occlusion_rays=16) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.bake_occlusion_to_vertex_color(handle, occlusion_rays)
+
+    @staticmethod
+    def create_dynamic_mesh():
+        """X.create_dynamic_mesh() -> int32"""
+        return unreal.UnrealBridgeGeometryLibrary.create_dynamic_mesh()
+
+    @staticmethod
+    def extrude_selection(*, handle, selection_id, distance):
+        """X.extrude_selection(handle, selection_id, distance) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.extrude_selection(handle, selection_id, distance)
+
+    @staticmethod
+    def get_mesh_info(*, handle):
+        """X.get_mesh_info(handle) -> BridgeMeshInfo"""
+        return unreal.UnrealBridgeGeometryLibrary.get_mesh_info(handle)
+
+    @staticmethod
+    def list_dynamic_mesh_handles():
+        """X.list_dynamic_mesh_handles() -> Array[int32]"""
+        return unreal.UnrealBridgeGeometryLibrary.list_dynamic_mesh_handles()
+
+    @staticmethod
+    def list_selections():
+        """X.list_selections() -> Array[int32]"""
+        return unreal.UnrealBridgeGeometryLibrary.list_selections()
+
+    @staticmethod
+    def load_mesh_from_component(*, actor_label, component_name, handle):
+        """X.load_mesh_from_component(actor_label, component_name, handle) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.load_mesh_from_component(actor_label, component_name, handle)
+
+    @staticmethod
+    def load_mesh_from_static_mesh(*, handle, asset_path, lod=0):
+        """X.load_mesh_from_static_mesh(handle, asset_path, lod=0) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.load_mesh_from_static_mesh(handle, asset_path, lod)
+
+    @staticmethod
+    def mesh_boolean(*, handle_a, handle_b, op):
+        """X.mesh_boolean(handle_a, handle_b, op) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.mesh_boolean(handle_a, handle_b, op)
+
+    @staticmethod
+    def mesh_decimate(*, handle, target_tris):
+        """X.mesh_decimate(handle, target_tris) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.mesh_decimate(handle, target_tris)
+
+    @staticmethod
+    def mesh_displace_from_texture(*, handle, texture_path, magnitude, uv_channel=0):
+        """X.mesh_displace_from_texture(handle, texture_path, magnitude, uv_channel=0) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.mesh_displace_from_texture(handle, texture_path, magnitude, uv_channel)
+
+    @staticmethod
+    def mesh_smooth(*, handle, iterations, strength):
+        """X.mesh_smooth(handle, iterations, strength) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.mesh_smooth(handle, iterations, strength)
+
+    @staticmethod
+    def mesh_transform(*, handle, transform):
+        """X.mesh_transform(handle, transform) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.mesh_transform(handle, transform)
+
+    @staticmethod
+    def mesh_uniform_remesh(*, handle, target_tri_count):
+        """X.mesh_uniform_remesh(handle, target_tri_count) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.mesh_uniform_remesh(handle, target_tri_count)
+
+    @staticmethod
+    def mesh_uv_unwrap(*, handle, method):
+        """X.mesh_uv_unwrap(handle, method) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.mesh_uv_unwrap(handle, method)
+
+    @staticmethod
+    def mesh_voxel_merge(*, handles, cell_size_cm):
+        """X.mesh_voxel_merge(handles, cell_size_cm) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.mesh_voxel_merge(handles, cell_size_cm)
+
+    @staticmethod
+    def recompute_normals_and_tangents(*, handle, angle_threshold_deg):
+        """X.recompute_normals_and_tangents(handle, angle_threshold_deg) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.recompute_normals_and_tangents(handle, angle_threshold_deg)
+
+    @staticmethod
+    def release_dynamic_mesh(*, handle):
+        """X.release_dynamic_mesh(handle) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.release_dynamic_mesh(handle)
+
+    @staticmethod
+    def release_selection(*, selection_id):
+        """X.release_selection(selection_id) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.release_selection(selection_id)
+
+    @staticmethod
+    def save_mesh_to_existing_static_mesh(*, handle, existing_asset_path, replace_materials):
+        """X.save_mesh_to_existing_static_mesh(handle, existing_asset_path, replace_materials) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.save_mesh_to_existing_static_mesh(handle, existing_asset_path, replace_materials)
+
+    @staticmethod
+    def save_mesh_to_new_static_mesh(*, handle, new_asset_path, material_list):
+        """X.save_mesh_to_new_static_mesh(handle, new_asset_path, material_list) -> str"""
+        return unreal.UnrealBridgeGeometryLibrary.save_mesh_to_new_static_mesh(handle, new_asset_path, material_list)
+
+    @staticmethod
+    def select_by_normal_direction(*, handle, normal, max_angle_deg):
+        """X.select_by_normal_direction(handle, normal, max_angle_deg) -> int32"""
+        return unreal.UnrealBridgeGeometryLibrary.select_by_normal_direction(handle, normal, max_angle_deg)
+
+    @staticmethod
+    def sweep_along_spline(*, handle, profile_xy, actor_label, component_name, num_path_samples=32):
+        """X.sweep_along_spline(handle, profile_xy, actor_label, component_name, num_path_samples=32) -> bool"""
+        return unreal.UnrealBridgeGeometryLibrary.sweep_along_spline(handle, profile_xy, actor_label, component_name, num_path_samples)
+
+
 class Level:
     """Wraps unreal.UnrealBridgeLevelLibrary (kwargs-only)."""
 
@@ -4389,6 +4533,50 @@ class Navigation:
     def export_nav_mesh_to_obj(*, out_file_path):
         """X.export_nav_mesh_to_obj(out_file_path) -> str or None"""
         return unreal.UnrealBridgeNavigationLibrary.export_nav_mesh_to_obj(out_file_path)
+
+
+class PCG:
+    """Wraps unreal.UnrealBridgePCGLibrary (kwargs-only)."""
+
+    @staticmethod
+    def cleanup_pcg_component(*, actor_label, component_name, remove_components=False):
+        """X.cleanup_pcg_component(actor_label, component_name, remove_components=False) -> bool"""
+        return unreal.UnrealBridgePCGLibrary.cleanup_pcg_component(actor_label, component_name, remove_components)
+
+    @staticmethod
+    def get_pcg_component_overrides(*, actor_label, component_name):
+        """X.get_pcg_component_overrides(actor_label, component_name) -> Array[BridgePCGOverrideEntry]"""
+        return unreal.UnrealBridgePCGLibrary.get_pcg_component_overrides(actor_label, component_name)
+
+    @staticmethod
+    def get_pcg_component_state(*, actor_label, component_name):
+        """X.get_pcg_component_state(actor_label, component_name) -> BridgePCGComponentState"""
+        return unreal.UnrealBridgePCGLibrary.get_pcg_component_state(actor_label, component_name)
+
+    @staticmethod
+    def list_pcg_components_in_level(*, level_filter, max=200):
+        """X.list_pcg_components_in_level(level_filter, max=200) -> Array[BridgePCGComponentEntry]"""
+        return unreal.UnrealBridgePCGLibrary.list_pcg_components_in_level(level_filter, max)
+
+    @staticmethod
+    def list_pcg_graph_assets(*, filter, max=200):
+        """X.list_pcg_graph_assets(filter, max=200) -> Array[str]"""
+        return unreal.UnrealBridgePCGLibrary.list_pcg_graph_assets(filter, max)
+
+    @staticmethod
+    def set_pcg_component_override(*, actor_label, component_name, name, exported_value):
+        """X.set_pcg_component_override(actor_label, component_name, name, exported_value) -> bool"""
+        return unreal.UnrealBridgePCGLibrary.set_pcg_component_override(actor_label, component_name, name, exported_value)
+
+    @staticmethod
+    def trigger_pcg_generate(*, actor_label, component_name, force=False):
+        """X.trigger_pcg_generate(actor_label, component_name, force=False) -> bool"""
+        return unreal.UnrealBridgePCGLibrary.trigger_pcg_generate(actor_label, component_name, force)
+
+    @staticmethod
+    def wait_for_pcg_generate(*, actor_label, component_name, timeout_sec=60.000000):
+        """X.wait_for_pcg_generate(actor_label, component_name, timeout_sec=60.000000) -> BridgePCGWaitResult"""
+        return unreal.UnrealBridgePCGLibrary.wait_for_pcg_generate(actor_label, component_name, timeout_sec)
 
 
 class Perf:

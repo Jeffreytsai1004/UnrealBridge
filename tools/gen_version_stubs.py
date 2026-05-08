@@ -40,6 +40,7 @@ TARGETS: list[dict] = [
     {"name": "UnrealBridgeMaterialLibrary",       "scope": "all"},
     {"name": "UnrealBridgeNavigationLibrary",     "scope": "all"},
     {"name": "UnrealBridgeGeometryLibrary",       "scope": "all"},
+    {"name": "UnrealBridgePCGLibrary",             "scope": "all"},
     {"name": "UnrealBridgeDataTableLibrary",      "scope": "function", "function": "CopyDataTableRows"},
     {"name": "UnrealBridgeBlueprintLibrary",      "scope": "function", "function": "AddAsyncActionNode"},
     {"name": "UnrealBridgeGameplayAbilityLibrary","scope": "function", "function": "AddAbilityTaskNode"},

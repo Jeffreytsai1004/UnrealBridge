@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-05-07T17:14:06+00:00",
+  "generated_at": "2026-05-08T13:58:49+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -12859,6 +12859,595 @@
         }
       }
     },
+    "UnrealBridgeGeometryLibrary": {
+      "functions": {
+        "append_box": {
+          "doc": "X.append_box(handle, origin, size) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "origin",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "size",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "append_cone": {
+          "doc": "X.append_cone(handle, origin, base_radius, height, radial_segments) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "origin",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "base_radius",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "height",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "radial_segments",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "append_cylinder": {
+          "doc": "X.append_cylinder(handle, origin, radius, height, radial_segments) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "origin",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "radius",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "height",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "radial_segments",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "append_sphere": {
+          "doc": "X.append_sphere(handle, origin, radius, resolution_uv) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "origin",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "radius",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "resolution_uv",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "bake_normals_to_texture": {
+          "doc": "X.bake_normals_to_texture(handle, new_texture_path, resolution) -> str",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "new_texture_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "resolution",
+              "type": ""
+            }
+          ],
+          "returns": "str"
+        },
+        "bake_occlusion_to_vertex_color": {
+          "doc": "X.bake_occlusion_to_vertex_color(handle, occlusion_rays=16) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": "16",
+              "has_default": true,
+              "name": "occlusion_rays",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "create_dynamic_mesh": {
+          "doc": "X.create_dynamic_mesh() -> int32",
+          "params": [],
+          "returns": "int32"
+        },
+        "extrude_selection": {
+          "doc": "X.extrude_selection(handle, selection_id, distance) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "selection_id",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "distance",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "get_mesh_info": {
+          "doc": "X.get_mesh_info(handle) -> BridgeMeshInfo",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            }
+          ],
+          "returns": "BridgeMeshInfo"
+        },
+        "list_dynamic_mesh_handles": {
+          "doc": "X.list_dynamic_mesh_handles() -> Array[int32]",
+          "params": [],
+          "returns": "Array[int32]"
+        },
+        "list_selections": {
+          "doc": "X.list_selections() -> Array[int32]",
+          "params": [],
+          "returns": "Array[int32]"
+        },
+        "load_mesh_from_component": {
+          "doc": "X.load_mesh_from_component(actor_label, component_name, handle) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "actor_label",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "component_name",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "load_mesh_from_static_mesh": {
+          "doc": "X.load_mesh_from_static_mesh(handle, asset_path, lod=0) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "asset_path",
+              "type": ""
+            },
+            {
+              "default": "0",
+              "has_default": true,
+              "name": "lod",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "mesh_boolean": {
+          "doc": "X.mesh_boolean(handle_a, handle_b, op) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle_a",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle_b",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "op",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "mesh_decimate": {
+          "doc": "X.mesh_decimate(handle, target_tris) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "target_tris",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "mesh_displace_from_texture": {
+          "doc": "X.mesh_displace_from_texture(handle, texture_path, magnitude, uv_channel=0) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "texture_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "magnitude",
+              "type": ""
+            },
+            {
+              "default": "0",
+              "has_default": true,
+              "name": "uv_channel",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "mesh_smooth": {
+          "doc": "X.mesh_smooth(handle, iterations, strength) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "iterations",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "strength",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "mesh_transform": {
+          "doc": "X.mesh_transform(handle, transform) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "transform",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "mesh_uniform_remesh": {
+          "doc": "X.mesh_uniform_remesh(handle, target_tri_count) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "target_tri_count",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "mesh_uv_unwrap": {
+          "doc": "X.mesh_uv_unwrap(handle, method) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "method",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "mesh_voxel_merge": {
+          "doc": "X.mesh_voxel_merge(handles, cell_size_cm) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handles",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "cell_size_cm",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "recompute_normals_and_tangents": {
+          "doc": "X.recompute_normals_and_tangents(handle, angle_threshold_deg) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "angle_threshold_deg",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "release_dynamic_mesh": {
+          "doc": "X.release_dynamic_mesh(handle) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "release_selection": {
+          "doc": "X.release_selection(selection_id) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "selection_id",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "save_mesh_to_existing_static_mesh": {
+          "doc": "X.save_mesh_to_existing_static_mesh(handle, existing_asset_path, replace_materials) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "existing_asset_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "replace_materials",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "save_mesh_to_new_static_mesh": {
+          "doc": "X.save_mesh_to_new_static_mesh(handle, new_asset_path, material_list) -> str",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "new_asset_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "material_list",
+              "type": ""
+            }
+          ],
+          "returns": "str"
+        },
+        "select_by_normal_direction": {
+          "doc": "X.select_by_normal_direction(handle, normal, max_angle_deg) -> int32",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "normal",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "max_angle_deg",
+              "type": ""
+            }
+          ],
+          "returns": "int32"
+        },
+        "sweep_along_spline": {
+          "doc": "X.sweep_along_spline(handle, profile_xy, actor_label, component_name, num_path_samples=32) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "handle",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "profile_xy",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "actor_label",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "component_name",
+              "type": ""
+            },
+            {
+              "default": "32",
+              "has_default": true,
+              "name": "num_path_samples",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        }
+      }
+    },
     "UnrealBridgeLevelLibrary": {
       "functions": {
         "add_actor_tag": {
@@ -16530,6 +17119,184 @@
         }
       }
     },
+    "UnrealBridgePCGLibrary": {
+      "functions": {
+        "cleanup_pcg_component": {
+          "doc": "X.cleanup_pcg_component(actor_label, component_name, remove_components=False) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "actor_label",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "component_name",
+              "type": ""
+            },
+            {
+              "default": "False",
+              "has_default": true,
+              "name": "remove_components",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "get_pcg_component_overrides": {
+          "doc": "X.get_pcg_component_overrides(actor_label, component_name) -> Array[BridgePCGOverrideEntry]",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "actor_label",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "component_name",
+              "type": ""
+            }
+          ],
+          "returns": "Array[BridgePCGOverrideEntry]"
+        },
+        "get_pcg_component_state": {
+          "doc": "X.get_pcg_component_state(actor_label, component_name) -> BridgePCGComponentState",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "actor_label",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "component_name",
+              "type": ""
+            }
+          ],
+          "returns": "BridgePCGComponentState"
+        },
+        "list_pcg_components_in_level": {
+          "doc": "X.list_pcg_components_in_level(level_filter, max=200) -> Array[BridgePCGComponentEntry]",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "level_filter",
+              "type": ""
+            },
+            {
+              "default": "200",
+              "has_default": true,
+              "name": "max",
+              "type": ""
+            }
+          ],
+          "returns": "Array[BridgePCGComponentEntry]"
+        },
+        "list_pcg_graph_assets": {
+          "doc": "X.list_pcg_graph_assets(filter, max=200) -> Array[str]",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "filter",
+              "type": ""
+            },
+            {
+              "default": "200",
+              "has_default": true,
+              "name": "max",
+              "type": ""
+            }
+          ],
+          "returns": "Array[str]"
+        },
+        "set_pcg_component_override": {
+          "doc": "X.set_pcg_component_override(actor_label, component_name, name, exported_value) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "actor_label",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "component_name",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "name",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "exported_value",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "trigger_pcg_generate": {
+          "doc": "X.trigger_pcg_generate(actor_label, component_name, force=False) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "actor_label",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "component_name",
+              "type": ""
+            },
+            {
+              "default": "False",
+              "has_default": true,
+              "name": "force",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "wait_for_pcg_generate": {
+          "doc": "X.wait_for_pcg_generate(actor_label, component_name, timeout_sec=60.000000) -> BridgePCGWaitResult",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "actor_label",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "component_name",
+              "type": ""
+            },
+            {
+              "default": "60.000000",
+              "has_default": true,
+              "name": "timeout_sec",
+              "type": ""
+            }
+          ],
+          "returns": "BridgePCGWaitResult"
+        }
+      }
+    },
     "UnrealBridgePerfLibrary": {
       "functions": {
         "clear_hitch_log": {
@@ -19998,6 +20765,14 @@
       "used_physical_mb",
       "used_virtual_mb"
     ],
+    "BridgeMeshInfo": [
+      "bounds",
+      "has_normals",
+      "has_vertex_colors",
+      "num_triangles",
+      "num_uv_layers",
+      "num_vertices"
+    ],
     "BridgeMeshLODStats": [
       "lod_index",
       "material_indices",
@@ -20114,6 +20889,31 @@
       "class_name",
       "is_dirty",
       "path"
+    ],
+    "BridgePCGComponentEntry": [
+      "actor_label",
+      "component_name",
+      "generated",
+      "generating",
+      "graph_path"
+    ],
+    "BridgePCGComponentState": [
+      "dirty",
+      "generated",
+      "generated_bounds",
+      "generating",
+      "graph_path",
+      "last_generation_iso"
+    ],
+    "BridgePCGOverrideEntry": [
+      "name",
+      "type_str",
+      "value_str"
+    ],
+    "BridgePCGWaitResult": [
+      "elapsed_ms",
+      "note",
+      "success"
     ],
     "BridgePSDAddResult": [
       "error",
