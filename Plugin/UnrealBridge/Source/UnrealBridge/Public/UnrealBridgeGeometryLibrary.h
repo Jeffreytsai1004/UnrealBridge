@@ -393,4 +393,81 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
 	static bool MeshUVUnwrap(int32 Handle, const FString& Method);
+
+	// ─── M5-10/11 — Selection state + extrude ────────────────────
+
+	/**
+	 * Select triangles whose face-normal lies within `MaxAngleDeg` of `Normal`.
+	 * Returns a process-global selection id (≥1) that subsequent calls
+	 * (`extrude_selection`, future selection-consuming ops) can reference.
+	 * Caller must `release_selection(id)` when done.
+	 *
+	 * Roadmap M5-10 originally said "select_by_plane" — the Geometry Script API
+	 * exposes only normal-direction selection (`SelectMeshElementsByNormalAngle`),
+	 * which covers the common "select the top of the mesh" / "select front-facing"
+	 * use cases. For arbitrary plane-side selection, fall back to a future
+	 * `EditMesh` lambda primitive.
+	 *
+	 * @param Handle      Source mesh.
+	 * @param Normal      Reference normal direction (will be normalized internally).
+	 * @param MaxAngleDeg Half-angle cone around `Normal` in degrees. 0 = exact
+	 *                    match (almost never matches anything); 30-90 typical.
+	 * @return Selection id (≥1) on success; 0 on failure (handle invalid or
+	 *         empty selection).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
+	static int32 SelectByNormalDirection(int32 Handle, FVector Normal, float MaxAngleDeg);
+
+	/** Drop a selection id. Idempotent — releasing an unknown id returns false. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
+	static bool ReleaseSelection(int32 SelectionId);
+
+	/** All currently-registered selection ids (sorted ascending). Debug aid. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
+	static TArray<int32> ListSelections();
+
+	/**
+	 * Linear-extrude the triangles identified by `SelectionId` along their
+	 * averaged normal by `Distance` cm. Wraps `MeshModelingFunctions::ApplyMesh-
+	 * LinearExtrudeFaces` with `DirectionMode=AveragedFaceNormal` (each selected
+	 * face moves along its own average normal — gives natural-looking growth on
+	 * curved surfaces; uniform Z extrusion is also possible by passing a fixed
+	 * `Direction`, not exposed here).
+	 *
+	 * @param Handle      Target mesh.
+	 * @param SelectionId Live selection id from `select_by_normal_direction`.
+	 * @param Distance    cm along the per-face averaged normal.
+	 * @return true on success.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
+	static bool ExtrudeSelection(int32 Handle, int32 SelectionId, float Distance);
+
+	// ─── M5-12 — Sweep along spline ──────────────────────────────
+
+	/**
+	 * Append a swept-polygon mesh by sampling a spline component on a level
+	 * actor. Wraps `MeshPrimitiveFunctions::AppendSweepPolygon`. Sample count
+	 * controls path resolution.
+	 *
+	 * @param Handle        Target mesh (geometry is appended; existing geometry
+	 *                      is preserved).
+	 * @param ProfileXY     Cross-section polygon in XY plane (cm). Vertices in
+	 *                      CCW order. Min 3 verts.
+	 * @param ActorLabel    Level actor that owns the spline component.
+	 * @param ComponentName FName of the USplineComponent on the actor. Empty →
+	 *                      first USplineComponent found.
+	 * @param NumPathSamples Number of evenly-spaced transforms sampled along
+	 *                      the spline (≥2). Higher = smoother sweep, more tris.
+	 *                      Engine default for cylinder-like sweeps is ~32.
+	 * @return true on success.
+	 *
+	 * Editor world only.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
+	static bool SweepAlongSpline(
+		int32 Handle,
+		const TArray<FVector2D>& ProfileXY,
+		const FString& ActorLabel,
+		const FString& ComponentName,
+		int32 NumPathSamples = 32);
 };

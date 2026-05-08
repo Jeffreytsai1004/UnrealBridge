@@ -35,7 +35,13 @@ Hard contract:
 - `mesh_voxel_merge` (M5-6) — multi-handle merge → solidify
 - `mesh_uv_unwrap` (M5-7) — box / cylinder / plane projections
 
-Remaining: M5-10/11/12 selection/extrude/sweep, M6-1/2 bake — phases 6-7.
+**Phase 6 — selection + extrude + sweep (5 ops, 3 user-facing + 2 selection-pool helpers)**:
+- `select_by_normal_direction` (M5-10) — wraps SelectMeshElementsByNormalAngle
+- `release_selection`, `list_selections` — selection-pool helpers (parallel pool to mesh handles)
+- `extrude_selection` (M5-11)
+- `sweep_along_spline` (M5-12)
+
+Remaining: M6-1/2 bake — phase 7. Then Lane 2 closes 23/23.
 
 ---
 

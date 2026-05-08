@@ -33,7 +33,10 @@
 #include "GeometryScript/MeshVoxelFunctions.h"
 #include "GeometryScript/MeshUVFunctions.h"
 #include "GeometryScript/MeshBasicEditFunctions.h"
+#include "GeometryScript/MeshSelectionFunctions.h"
+#include "GeometryScript/MeshModelingFunctions.h"
 #include "Engine/Texture2D.h"
+#include "Components/SplineComponent.h"
 
 #define LOCTEXT_NAMESPACE "UnrealBridgeGeometry"
 
@@ -97,6 +100,54 @@ namespace BridgeGeometryImpl
 			if (A->GetFName() == AsName || A->GetActorLabel() == NameOrLabel)
 			{
 				return A;
+			}
+		}
+		return nullptr;
+	}
+
+	// Process-global selection pool, parallel to FHandlePool. Selections are
+	// value-type structs so plain map storage suffices (no GC concern).
+	struct FSelectionPool
+	{
+		TMap<int32, FGeometryScriptMeshSelection> Map;
+		int32 NextId = 1;
+	};
+
+	FSelectionPool& GetSelectionPool()
+	{
+		static FSelectionPool Pool;
+		return Pool;
+	}
+
+	FGeometryScriptMeshSelection* ResolveSelection(int32 SelectionId)
+	{
+		FSelectionPool& Pool = GetSelectionPool();
+		FGeometryScriptMeshSelection* Found = Pool.Map.Find(SelectionId);
+		if (!Found)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: selection %d is not registered"), SelectionId);
+		}
+		return Found;
+	}
+
+	USplineComponent* FindSpline(AActor* Actor, const FString& ComponentName)
+	{
+		if (!Actor)
+		{
+			return nullptr;
+		}
+		TArray<USplineComponent*> Splines;
+		Actor->GetComponents<USplineComponent>(Splines);
+		if (ComponentName.IsEmpty())
+		{
+			return Splines.Num() > 0 ? Splines[0] : nullptr;
+		}
+		const FName AsName(*ComponentName);
+		for (USplineComponent* S : Splines)
+		{
+			if (S && (S->GetFName() == AsName || S->GetName() == ComponentName))
+			{
+				return S;
 			}
 		}
 		return nullptr;
@@ -572,6 +623,144 @@ bool UUnrealBridgeGeometryLibrary::MeshVoxelMerge(const TArray<int32>& Handles, 
 	UDynamicMesh* Result = UGeometryScriptLibrary_MeshVoxelFunctions::ApplyMeshSolidify(
 		Target, Options, /*Debug=*/nullptr);
 	return Result == Target;
+}
+
+int32 UUnrealBridgeGeometryLibrary::SelectByNormalDirection(int32 Handle, FVector Normal, float MaxAngleDeg)
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Mesh = ResolveHandle(Handle);
+	if (!Mesh)
+	{
+		return 0;
+	}
+	if (!Normal.Normalize())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: SelectByNormalDirection received zero normal"));
+		return 0;
+	}
+
+	FGeometryScriptMeshSelection Selection;
+	UGeometryScriptLibrary_MeshSelectionFunctions::SelectMeshElementsByNormalAngle(
+		Mesh, Selection, Normal, FMath::Max(0.0f, MaxAngleDeg),
+		EGeometryScriptMeshSelectionType::Triangles,
+		/*bInvert=*/false,
+		/*MinNumTrianglePoints=*/3);
+
+	if (Selection.IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: SelectByNormalDirection produced empty selection"));
+		return 0;
+	}
+
+	FSelectionPool& Pool = GetSelectionPool();
+	const int32 Id = Pool.NextId++;
+	Pool.Map.Add(Id, Selection);
+	return Id;
+}
+
+bool UUnrealBridgeGeometryLibrary::ReleaseSelection(int32 SelectionId)
+{
+	using namespace BridgeGeometryImpl;
+	return GetSelectionPool().Map.Remove(SelectionId) > 0;
+}
+
+TArray<int32> UUnrealBridgeGeometryLibrary::ListSelections()
+{
+	using namespace BridgeGeometryImpl;
+	TArray<int32> Out;
+	GetSelectionPool().Map.GenerateKeyArray(Out);
+	Out.Sort();
+	return Out;
+}
+
+bool UUnrealBridgeGeometryLibrary::ExtrudeSelection(int32 Handle, int32 SelectionId, float Distance)
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Mesh = ResolveHandle(Handle);
+	if (!Mesh)
+	{
+		return false;
+	}
+	FGeometryScriptMeshSelection* Selection = ResolveSelection(SelectionId);
+	if (!Selection)
+	{
+		return false;
+	}
+
+	FGeometryScriptMeshLinearExtrudeOptions Options;
+	Options.Distance      = Distance;
+	Options.DirectionMode = EGeometryScriptLinearExtrudeDirection::AverageFaceNormal;
+	// Direction (FixedDirection mode), AreaMode (EntireSelection), GroupOptions (defaults), UVScale=1, bSolidsToShells=true — engine defaults.
+
+	UDynamicMesh* Result = UGeometryScriptLibrary_MeshModelingFunctions::ApplyMeshLinearExtrudeFaces(
+		Mesh, Options, *Selection, /*Debug=*/nullptr);
+	return Result == Mesh;
+}
+
+bool UUnrealBridgeGeometryLibrary::SweepAlongSpline(
+	int32 Handle,
+	const TArray<FVector2D>& ProfileXY,
+	const FString& ActorLabel,
+	const FString& ComponentName,
+	int32 NumPathSamples)
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Mesh = ResolveHandle(Handle);
+	if (!Mesh)
+	{
+		return false;
+	}
+	if (ProfileXY.Num() < 3)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: SweepAlongSpline requires ≥3 profile vertices"));
+		return false;
+	}
+
+	UWorld* World = GetEditorWorld();
+	AActor* Actor = FindActor(World, ActorLabel);
+	if (!Actor)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: SweepAlongSpline could not find actor '%s'"), *ActorLabel);
+		return false;
+	}
+	USplineComponent* Spline = FindSpline(Actor, ComponentName);
+	if (!Spline)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("UnrealBridge|Geometry: SweepAlongSpline could not find spline component '%s' on actor '%s'"),
+			*ComponentName, *ActorLabel);
+		return false;
+	}
+
+	const int32 SampleCount = FMath::Max(2, NumPathSamples);
+	const float TotalLength = Spline->GetSplineLength();
+	if (TotalLength <= 0.f)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("UnrealBridge|Geometry: SweepAlongSpline got zero-length spline"));
+		return false;
+	}
+
+	TArray<FTransform> SweepPath;
+	SweepPath.Reserve(SampleCount);
+	for (int32 i = 0; i < SampleCount; ++i)
+	{
+		const float Distance = (TotalLength * i) / (SampleCount - 1);
+		FTransform T = Spline->GetTransformAtDistanceAlongSpline(
+			Distance, ESplineCoordinateSpace::Local, /*bUseScale=*/true);
+		SweepPath.Add(T);
+	}
+
+	FGeometryScriptPrimitiveOptions Options;
+	UDynamicMesh* Result = UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendSweepPolygon(
+		Mesh, Options, FTransform::Identity,
+		ProfileXY, SweepPath,
+		/*bLoop=*/Spline->IsClosedLoop(),
+		/*bCapped=*/!Spline->IsClosedLoop(),
+		/*StartScale=*/1.0f, /*EndScale=*/1.0f,
+		/*RotationAngleDeg=*/0.0f, /*MiterLimit=*/1.0f,
+		/*Debug=*/nullptr);
+
+	return Result == Mesh;
 }
 
 bool UUnrealBridgeGeometryLibrary::MeshUVUnwrap(int32 Handle, const FString& Method)

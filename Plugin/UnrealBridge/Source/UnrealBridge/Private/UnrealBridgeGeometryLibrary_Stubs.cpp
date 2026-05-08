@@ -135,4 +135,34 @@ bool UUnrealBridgeGeometryLibrary::MeshUVUnwrap(int32 Handle, const FString& Met
 	return bool{};
 }
 
+int32 UUnrealBridgeGeometryLibrary::SelectByNormalDirection(int32 Handle, FVector Normal, float MaxAngleDeg)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeGeometryLibrary::SelectByNormalDirection requires UE 5.7+ — call ignored on this engine version"));
+	return int32{};
+}
+
+bool UUnrealBridgeGeometryLibrary::ReleaseSelection(int32 SelectionId)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeGeometryLibrary::ReleaseSelection requires UE 5.7+ — call ignored on this engine version"));
+	return bool{};
+}
+
+TArray<int32> UUnrealBridgeGeometryLibrary::ListSelections()
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeGeometryLibrary::ListSelections requires UE 5.7+ — call ignored on this engine version"));
+	return TArray<int32>{};
+}
+
+bool UUnrealBridgeGeometryLibrary::ExtrudeSelection(int32 Handle, int32 SelectionId, float Distance)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeGeometryLibrary::ExtrudeSelection requires UE 5.7+ — call ignored on this engine version"));
+	return bool{};
+}
+
+bool UUnrealBridgeGeometryLibrary::SweepAlongSpline(int32 Handle, const TArray<FVector2D>& ProfileXY, const FString& ActorLabel, const FString& ComponentName, int32 NumPathSamples)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeGeometryLibrary::SweepAlongSpline requires UE 5.7+ — call ignored on this engine version"));
+	return bool{};
+}
+
 #endif // UE_VERSION_OLDER_THAN(5, 7, 0)
