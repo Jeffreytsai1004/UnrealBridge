@@ -1,14 +1,28 @@
 # bridge-perf-api
 
-`unreal.UnrealBridgePerfLibrary` — structured performance snapshots. Replaces parsing `stat unit` text output with typed UPROPERTY structs.
+`unreal.UnrealBridgePerfLibrary` — AAA-grade performance instrumentation. Returns structured UPROPERTY data instead of parsing `stat unit` text output. Eight dimensions:
 
-Values come from engine globals on the GameThread:
-- `FStatUnitData` from the active level viewport (smoothed running averages) → `GetFrameTiming`
-- `GNumDrawCallsRHI` / `GNumPrimitivesDrawnRHI` (RHI, summed across `MAX_NUM_GPUS`) → `GetRenderCounters`
-- `FPlatformMemory::GetStats()` + `FPlatformMemory::GetConstants()` → `GetMemoryStats`
-- `TObjectIterator<UObject>` aggregated by `UClass` → `GetUObjectStats`
+| Dimension | Functions |
+|---|---|
+| Point-in-time | `get_frame_timing` · `get_render_counters` · `get_memory_stats` · `get_u_object_stats` · `get_perf_snapshot` |
+| Memory & asset breakdown | (covered in [bridge-perf-api § Memory dimension](#) — see source for the full set: `get_texture_memory_breakdown` / `get_mesh_memory_breakdown` / `get_audio_memory_breakdown` / `get_uobject_memory_breakdown` / `get_world_actor_breakdown` / `get_asset_size_top_n`) |
+| Time series | `start_perf_sampling` / `stop_perf_sampling` / `get_perf_sampling_state` · `get_frame_time_histogram` · `get_hitch_log` · `reset_frame_time_histogram` · `clear_hitch_log` · `export_perf_samples_to_csv` · **`get_frame_time_percentiles`** (M5-4) |
+| Render breakdown | `get_visible_primitives_by_material` · `get_actor_render_cost` · `get_lod_distribution` · `get_lumen_diagnostics` · `get_nanite_stats` · `get_shadow_caster_breakdown` · **`get_texture_streaming_residency`** (M7-1) · **`get_render_target_memory`** (M7-2) · **`get_per_pass_gpu_timings`** (M7-3) · **`analyze_all_materials`** (M7-4) |
+| Live trace control | `start_trace_capture` · `stop_trace_capture` · `get_trace_state` · `list_trace_channels` |
+| Trace summary parsers (5.7+) | **`parse_trace_to_summary`** (M4-5 + M5-1/M5-2/M5-3/M5-5 fields) · **`parse_alloc_trace_to_summary`** (M6-1) · **`parse_net_trace_to_summary`** (M6-2) · **`parse_cook_trace_to_summary`** (M6-3) |
+| Regression workflow | **`compare_perf_snapshots`** (M8-2) |
+| Auto-hitch + Insights handoff | **`begin_auto_hitch_capture`** / **`end_auto_hitch_capture`** / **`get_auto_hitch_state`** (M8-1) · **`begin_insights_for_trace`** (M8-3) |
 
-All functions are cheap except `GetUObjectStats` — see the cost note per function.
+**Origin sources** (read on the GameThread):
+- `FStatUnitData` from the active level viewport (smoothed running averages) → `get_frame_timing`
+- `GNumDrawCallsRHI` / `GNumPrimitivesDrawnRHI` (RHI, summed across `MAX_NUM_GPUS`) → `get_render_counters`
+- `FPlatformMemory::GetStats()` + `FPlatformMemory::GetConstants()` → `get_memory_stats`
+- `TObjectIterator<UObject>` aggregated by `UClass` → `get_u_object_stats`
+- `TraceServices::IAnalysisService::Analyze` (synchronous, blocks the bridge exec) → all `parse_*_trace_to_summary` parsers
+- `IRenderAssetStreamingManager` → `get_texture_streaming_residency`
+- `FRealtimeGPUProfiler::FetchPerfByDescription` (legacy GPU profiler path; UE 5.7's new RHI profiler is empty here — fall back to Insights) → `get_per_pass_gpu_timings`
+
+Most functions are cheap (microseconds). The slow paths: `get_u_object_stats` (50-300 ms — TObjectIterator), `parse_*_trace_to_summary` (1-30 s — Analyze() is synchronous), `analyze_all_materials` (seconds for thousands of materials — loads each from AssetRegistry).
 
 ---
 
@@ -487,7 +501,7 @@ print(f"p50={ps[0]:.1f} ms  p90={ps[1]:.1f} ms  p95={ps[2]:.1f} ms  p99={ps[3]:.
 
 ---
 
-## parse_trace_to_summary(utrace_path, top_n=20, top_n_per_thread=10) -> FBridgePerfTraceSummary
+## parse_trace_to_summary(utrace_path, top_n=20, top_n_per_thread=10, top_n_counters=100) -> FBridgePerfTraceSummary
 
 Parse a `.utrace` file (output of `start_trace_capture` / `stop_trace_capture` or `Trace.Start File=…` console command) into a structured summary. Wraps `TraceServices::IAnalysisService::Analyze` synchronously, then walks the diagnostics + frame + timing-profiler + thread providers.
 

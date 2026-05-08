@@ -67,7 +67,7 @@ from unreal_bridge import Asset, Level, Blueprint, Editor, Anim, Material, PoseS
 paths, _ = Asset.search_assets_in_all_content(query="Hero", max_results=20)
 ```
 
-The wrapper has 16 classes (one per `UnrealBridge*Library`) with **kwargs-only signatures** — positional args raise `TypeError` immediately, no UE round-trip. This is the structural fix for positional-arg-order hallucinations. Regenerate after C++ header changes via `python tools/gen_manifest.py`.
+The wrapper has 21 classes (one per `UnrealBridge*Library`) with **kwargs-only signatures** — positional args raise `TypeError` immediately, no UE round-trip. This is the structural fix for positional-arg-order hallucinations. Regenerate after C++ header changes via `python tools/gen_manifest.py`.
 
 Fallback: raw `unreal.UnrealBridge*Library.foo(...)` works (preflight catches errors), but prefer the wrapper.
 
