@@ -11769,7 +11769,18 @@ bool UUnrealBridgeBlueprintLibrary::AddPawnInputBeginPlaySetup(
 	}
 
 	// (3) GetSubsystemFromPC<UEnhancedInputLocalPlayerSubsystem>
-	UK2Node_GetSubsystemFromPC* GetSubNode = NewObject<UK2Node_GetSubsystemFromPC>(Graph);
+	// UK2Node_GetSubsystemFromPC has UCLASS() (not MinimalAPI) — its
+	// GetPrivateStaticClass symbol isn't exported from the BlueprintGraph DLL,
+	// so NewObject<UK2Node_GetSubsystemFromPC> fails to link on 5.4-5.6 (and
+	// likely 5.7 in stricter build configs). Resolve the UClass dynamically
+	// via FindObject + construct via the parent type, which IS MinimalAPI'd.
+	UClass* GetSubFromPCCls = FindObject<UClass>(nullptr, TEXT("/Script/BlueprintGraph.K2Node_GetSubsystemFromPC"));
+	if (!GetSubFromPCCls)
+	{
+		UE_LOG(LogTemp, Error, TEXT("UnrealBridge: K2Node_GetSubsystemFromPC class not found in BlueprintGraph"));
+		return false;
+	}
+	UK2Node_GetSubsystem* GetSubNode = NewObject<UK2Node_GetSubsystem>(Graph, GetSubFromPCCls);
 	GetSubNode->Initialize(UEnhancedInputLocalPlayerSubsystem::StaticClass());
 	GetSubNode->CreateNewGuid();
 	GetSubNode->NodePosX = OriginX + 640; GetSubNode->NodePosY = OriginY + 130;
