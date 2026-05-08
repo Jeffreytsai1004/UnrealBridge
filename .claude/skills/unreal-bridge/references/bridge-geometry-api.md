@@ -25,7 +25,12 @@ Hard contract:
 - `mesh_decimate` (M5-5)
 - `recompute_normals_and_tangents` (M6-3)
 
-Remaining M5 (primitives M5-1, displace M5-3, voxel-merge M5-6, UV unwrap M5-7, transform M5-8, triangulate M5-9, selection / extrude / sweep M5-10..12) and M6 bake (M6-1 BakeNormalsToTexture, M6-2 BakeOcclusionToVertexColor) land in a future phase — see roadmap §4 M5 / M6.
+**Phase 4 — primitives + transform + uniform remesh (6 ops)**:
+- `append_box`, `append_sphere`, `append_cylinder`, `append_cone` (M5-1)
+- `mesh_transform` (M5-8)
+- `mesh_uniform_remesh` (M5-9, "triangulate" in roadmap shorthand)
+
+Remaining: M5-3 displace, M5-6 voxel_merge, M5-7 UV unwrap, M5-10/11/12 selection/extrude/sweep, M6-1/2 bake — phases 5-7.
 
 ---
 
@@ -267,6 +272,53 @@ Internally always runs `ComputeTangents` after the normal step — RecomputeNorm
 **Pitfalls**
 - Without this after a boolean, the seam between unioned shapes will look smooth-shaded and "blobby". A 30° threshold gives natural-looking hard edges for most mechanical shapes.
 - ComputeTangents requires UVs — if the mesh has 0 UV layers, tangent computation no-ops silently (still returns true on the normal step).
+
+---
+
+---
+
+## append_box(handle, origin, size) -> bool / append_sphere(...) / append_cylinder(...) / append_cone(...)
+
+Append a primitive shape to the mesh held by `handle`. Each wraps one of the
+`MeshPrimitiveFunctions::Append*` calls with sane defaults and origin-mode set
+appropriately (Center for box/sphere, Base for cylinder/cone).
+
+| Function | Params (after `handle, origin`) | Wraps |
+|---|---|---|
+| `append_box` | `size: Vector` | `AppendBox` (Center origin) |
+| `append_sphere` | `radius: float, resolution_uv: int` | `AppendSphereLatLong` (StepsTheta=resolution_uv, StepsPhi=resolution_uv/2, Center origin) |
+| `append_cylinder` | `radius: float, height: float, radial_segments: int` | `AppendCylinder` (capped, Base origin, Z-axis) |
+| `append_cone` | `base_radius: float, height: float, radial_segments: int` | `AppendCone` (TopRadius=0, capped, Base origin, Z-axis) |
+
+Returns: true on Success.
+
+Each primitive **adds to** the mesh — successive calls accumulate. Use `create_dynamic_mesh()` for a fresh empty mesh.
+
+**Pitfalls**
+- Negative `size`/`radius`/`height` clamps to 0 (degenerate result, no crash).
+- For frustums (truncated cones) you need the underlying `AppendCone` with `TopRadius>0` — not exposed; fall back to direct `unreal.UGeometryScriptLibrary_MeshPrimitiveFunctions.append_cone(...)` until exposed.
+
+---
+
+## mesh_transform(handle, transform) -> bool
+
+Apply a full `Transform` (translation + rotation + scale) to every vertex of the mesh in-place. Wraps `MeshTransformFunctions::TransformMesh` with `bFixOrientationForNegativeScale=true` (engine default).
+
+**Pitfalls**
+- For translation-only or rotation-only there are cheaper specialized APIs (`TranslateMesh` / `RotateMesh`) — not exposed yet; use this `mesh_transform` for now.
+
+---
+
+## mesh_uniform_remesh(handle, target_tri_count) -> bool
+
+Re-tessellate the mesh into approximately `target_tri_count` uniform-density triangles. Wraps `RemeshingFunctions::ApplyUniformRemesh` with `TargetType=TriangleCount`.
+
+The roadmap labels this M5-9 "triangulate" — the actual operation is uniform remeshing, which does triangulate non-tri faces as a side effect but is primarily about tri-density evening.
+
+**Pitfalls**
+- Engine docs flag this as "expensive" + "non-deterministic, expected to change in future versions" — don't depend on exact output across UE upgrades.
+- Output count is approximate; ±50% is common at low targets.
+- Boundary edges default to `Free` (movable) — see `FGeometryScriptRemeshOptions` if you need to lock open boundaries.
 
 ---
 

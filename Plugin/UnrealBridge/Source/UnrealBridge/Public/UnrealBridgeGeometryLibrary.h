@@ -245,4 +245,88 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
 	static bool RecomputeNormalsAndTangents(int32 Handle, float AngleThresholdDeg);
+
+	// ─── M5-1 — Primitive append ─────────────────────────────────
+
+	/**
+	 * Append an axis-aligned box primitive centered at `Origin`. Wraps
+	 * `MeshPrimitiveFunctions::AppendBox` with `Origin = Center` and the
+	 * supplied `Size` mapped to (DimensionX, DimensionY, DimensionZ).
+	 *
+	 * @param Handle Target mesh.
+	 * @param Origin Box center in mesh-local space.
+	 * @param Size   Total extent (e.g. 100 → 100 cm box). Each component clamped ≥ 0.
+	 * @return true on success.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
+	static bool AppendBox(int32 Handle, FVector Origin, FVector Size);
+
+	/**
+	 * Append a UV-mapped sphere via `AppendSphereLatLong`. Origin = Center.
+	 *
+	 * @param Handle        Target mesh.
+	 * @param Origin        Sphere center in mesh-local space.
+	 * @param Radius        cm.
+	 * @param ResolutionUV  Theta steps (longitude). Phi steps (latitude) auto-set to
+	 *                      ResolutionUV/2 (typical 2:1 longitude:latitude aspect).
+	 *                      Common values: 16 (low) / 32 (med) / 64 (hi-poly).
+	 * @return true on success.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
+	static bool AppendSphere(int32 Handle, FVector Origin, float Radius, int32 ResolutionUV);
+
+	/**
+	 * Append a capped cylinder along +Z. Origin = Base; Height extends along +Z.
+	 *
+	 * @param Handle         Target mesh.
+	 * @param Origin         Base-center in mesh-local space.
+	 * @param Radius         cm.
+	 * @param Height         cm along +Z.
+	 * @param RadialSegments Steps around the circumference (≥3). Engine default 12.
+	 * @return true on success.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
+	static bool AppendCylinder(int32 Handle, FVector Origin, float Radius, float Height, int32 RadialSegments);
+
+	/**
+	 * Append a true cone (TopRadius = 0). For frustums, follow up with `mesh_transform`
+	 * + a manual append. Origin = Base; apex at Origin + Z*Height.
+	 *
+	 * @param Handle         Target mesh.
+	 * @param Origin         Base-center in mesh-local space.
+	 * @param BaseRadius     cm.
+	 * @param Height         cm along +Z.
+	 * @param RadialSegments Steps around base ring (≥3). Engine default 12.
+	 * @return true on success.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
+	static bool AppendCone(int32 Handle, FVector Origin, float BaseRadius, float Height, int32 RadialSegments);
+
+	// ─── M5-8 — Transform ────────────────────────────────────────
+
+	/**
+	 * Apply a full transform (translation + rotation + scale) to every vertex.
+	 * Wraps `MeshTransformFunctions::TransformMesh` with the orientation-flip-on-
+	 * negative-scale fix enabled (engine default).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
+	static bool MeshTransform(int32 Handle, FTransform Transform);
+
+	// ─── M5-9 — Uniform remesh (a.k.a. "triangulate" in roadmap shorthand) ─
+
+	/**
+	 * Re-tessellate the mesh to approximately `TargetTriCount` triangles using
+	 * uniform remeshing — produces an even tri-density distribution and is the
+	 * standard "clean up topology" pass after sweep / boolean / decimate. Wraps
+	 * `RemeshingFunctions::ApplyUniformRemesh`.
+	 *
+	 * Caveat: not deterministic; output count is approximate; can be expensive
+	 * for high tri counts. Engine doc says "future-version output may differ".
+	 *
+	 * @param Handle         Target mesh.
+	 * @param TargetTriCount Approximate desired triangle count (≥4).
+	 * @return true on success.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Geometry")
+	static bool MeshUniformRemesh(int32 Handle, int32 TargetTriCount);
 };

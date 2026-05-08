@@ -27,6 +27,9 @@
 #include "GeometryScript/MeshDeformFunctions.h"
 #include "GeometryScript/MeshSimplifyFunctions.h"
 #include "GeometryScript/MeshNormalsFunctions.h"
+#include "GeometryScript/MeshPrimitiveFunctions.h"
+#include "GeometryScript/MeshTransformFunctions.h"
+#include "GeometryScript/MeshRemeshFunctions.h"
 
 #define LOCTEXT_NAMESPACE "UnrealBridgeGeometry"
 
@@ -390,6 +393,116 @@ bool UUnrealBridgeGeometryLibrary::MeshDecimate(int32 Handle, int32 TargetTris)
 	UDynamicMesh* Result = UGeometryScriptLibrary_MeshSimplifyFunctions::ApplySimplifyToTriangleCount(
 		Mesh, ClampedTarget, Options, /*Debug=*/nullptr);
 
+	return Result == Mesh;
+}
+
+bool UUnrealBridgeGeometryLibrary::AppendBox(int32 Handle, FVector Origin, FVector Size)
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Mesh = ResolveHandle(Handle);
+	if (!Mesh)
+	{
+		return false;
+	}
+	FGeometryScriptPrimitiveOptions Options;  // PolyGroupMode::PerFace, etc. — engine defaults.
+	const FTransform Xform(Origin);
+	UDynamicMesh* Result = UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendBox(
+		Mesh, Options, Xform,
+		FMath::Max(0.f, Size.X), FMath::Max(0.f, Size.Y), FMath::Max(0.f, Size.Z),
+		/*StepsX=*/0, /*StepsY=*/0, /*StepsZ=*/0,
+		EGeometryScriptPrimitiveOriginMode::Center,
+		/*Debug=*/nullptr);
+	return Result == Mesh;
+}
+
+bool UUnrealBridgeGeometryLibrary::AppendSphere(int32 Handle, FVector Origin, float Radius, int32 ResolutionUV)
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Mesh = ResolveHandle(Handle);
+	if (!Mesh)
+	{
+		return false;
+	}
+	FGeometryScriptPrimitiveOptions Options;
+	const FTransform Xform(Origin);
+	const int32 StepsTheta = FMath::Max(3, ResolutionUV);          // longitude segments
+	const int32 StepsPhi   = FMath::Max(2, ResolutionUV / 2);      // latitude rings
+	UDynamicMesh* Result = UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendSphereLatLong(
+		Mesh, Options, Xform,
+		FMath::Max(0.f, Radius), StepsPhi, StepsTheta,
+		EGeometryScriptPrimitiveOriginMode::Center,
+		/*Debug=*/nullptr);
+	return Result == Mesh;
+}
+
+bool UUnrealBridgeGeometryLibrary::AppendCylinder(int32 Handle, FVector Origin, float Radius, float Height, int32 RadialSegments)
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Mesh = ResolveHandle(Handle);
+	if (!Mesh)
+	{
+		return false;
+	}
+	FGeometryScriptPrimitiveOptions Options;
+	const FTransform Xform(Origin);
+	UDynamicMesh* Result = UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendCylinder(
+		Mesh, Options, Xform,
+		FMath::Max(0.f, Radius), FMath::Max(0.f, Height),
+		FMath::Max(3, RadialSegments), /*HeightSteps=*/0, /*bCapped=*/true,
+		EGeometryScriptPrimitiveOriginMode::Base,
+		/*Debug=*/nullptr);
+	return Result == Mesh;
+}
+
+bool UUnrealBridgeGeometryLibrary::AppendCone(int32 Handle, FVector Origin, float BaseRadius, float Height, int32 RadialSegments)
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Mesh = ResolveHandle(Handle);
+	if (!Mesh)
+	{
+		return false;
+	}
+	FGeometryScriptPrimitiveOptions Options;
+	const FTransform Xform(Origin);
+	UDynamicMesh* Result = UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendCone(
+		Mesh, Options, Xform,
+		FMath::Max(0.f, BaseRadius), /*TopRadius=*/0.f,
+		FMath::Max(0.f, Height),
+		FMath::Max(3, RadialSegments), /*HeightSteps=*/4,
+		/*bCapped=*/true,
+		EGeometryScriptPrimitiveOriginMode::Base,
+		/*Debug=*/nullptr);
+	return Result == Mesh;
+}
+
+bool UUnrealBridgeGeometryLibrary::MeshTransform(int32 Handle, FTransform Transform)
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Mesh = ResolveHandle(Handle);
+	if (!Mesh)
+	{
+		return false;
+	}
+	UDynamicMesh* Result = UGeometryScriptLibrary_MeshTransformFunctions::TransformMesh(
+		Mesh, Transform, /*bFixOrientationForNegativeScale=*/true, /*Debug=*/nullptr);
+	return Result == Mesh;
+}
+
+bool UUnrealBridgeGeometryLibrary::MeshUniformRemesh(int32 Handle, int32 TargetTriCount)
+{
+	using namespace BridgeGeometryImpl;
+	UDynamicMesh* Mesh = ResolveHandle(Handle);
+	if (!Mesh)
+	{
+		return false;
+	}
+	FGeometryScriptRemeshOptions          RemeshOptions;       // bReprojectToInputMesh=true, SmoothingRate=0.25 (defaults)
+	FGeometryScriptUniformRemeshOptions   UniformOptions;
+	UniformOptions.TargetType          = EGeometryScriptUniformRemeshTargetType::TriangleCount;
+	UniformOptions.TargetTriangleCount = FMath::Max(4, TargetTriCount);
+
+	UDynamicMesh* Result = UGeometryScriptLibrary_RemeshingFunctions::ApplyUniformRemesh(
+		Mesh, RemeshOptions, UniformOptions, /*Debug=*/nullptr);
 	return Result == Mesh;
 }
 

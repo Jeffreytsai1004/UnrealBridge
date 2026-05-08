@@ -81,4 +81,40 @@ bool UUnrealBridgeGeometryLibrary::RecomputeNormalsAndTangents(int32 Handle, flo
 	return bool{};
 }
 
+bool UUnrealBridgeGeometryLibrary::AppendBox(int32 Handle, FVector Origin, FVector Size)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeGeometryLibrary::AppendBox requires UE 5.7+ — call ignored on this engine version"));
+	return bool{};
+}
+
+bool UUnrealBridgeGeometryLibrary::AppendSphere(int32 Handle, FVector Origin, float Radius, int32 ResolutionUV)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeGeometryLibrary::AppendSphere requires UE 5.7+ — call ignored on this engine version"));
+	return bool{};
+}
+
+bool UUnrealBridgeGeometryLibrary::AppendCylinder(int32 Handle, FVector Origin, float Radius, float Height, int32 RadialSegments)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeGeometryLibrary::AppendCylinder requires UE 5.7+ — call ignored on this engine version"));
+	return bool{};
+}
+
+bool UUnrealBridgeGeometryLibrary::AppendCone(int32 Handle, FVector Origin, float BaseRadius, float Height, int32 RadialSegments)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeGeometryLibrary::AppendCone requires UE 5.7+ — call ignored on this engine version"));
+	return bool{};
+}
+
+bool UUnrealBridgeGeometryLibrary::MeshTransform(int32 Handle, FTransform Transform)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeGeometryLibrary::MeshTransform requires UE 5.7+ — call ignored on this engine version"));
+	return bool{};
+}
+
+bool UUnrealBridgeGeometryLibrary::MeshUniformRemesh(int32 Handle, int32 TargetTriCount)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeGeometryLibrary::MeshUniformRemesh requires UE 5.7+ — call ignored on this engine version"));
+	return bool{};
+}
+
 #endif // UE_VERSION_OLDER_THAN(5, 7, 0)
