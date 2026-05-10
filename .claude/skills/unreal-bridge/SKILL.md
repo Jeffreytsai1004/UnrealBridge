@@ -1,7 +1,7 @@
 ---
 name: unreal-bridge
 description: Execute Python scripts inside a running Unreal Engine 5.3+ editor via TCP bridge. Use when the user asks to interact with UE, manipulate assets, query scenes, automate workflows, or run Python in Unreal.
-allowed-tools: Bash Read Write Edit Glob Grep
+allowed-tools: Bash Read Write Edit Glob Grep Monitor
 ---
 
 # UnrealBridge
@@ -17,6 +17,96 @@ If `bridge.py` returns `discovery: no UnrealBridge editors found`, walk these in
 3. **Editor up and ready** — `bridge.py ping` returns `"ready": true`. `false` means MainFrame still loading; wait 10–60s.
 
 Last resort if multicast is blocked (corp VPN, virtual NIC): `--endpoint=127.0.0.1:<port>` from the editor log line `LogUnrealBridge: Listening on 127.0.0.1:<port>`. Python 3.7+ stdlib only.
+
+## Waiting for the editor to become ready (post-launch / post-relaunch)
+
+When you (or a script like `rebuild_relaunch.py`) just started the editor, do
+**not** hand-roll a `for i in {1..60}; do sleep 5; …; done` shell loop in `Bash`
+— the harness blocks long leading sleeps, exit codes get swallowed, and you'll
+miss readiness or babysit a foreground shell for minutes.
+
+**Two correct shapes**, both built on the same until-loop. Pick by whether you
+want progress events:
+
+- **Single "tell me when it's up" notification** → `Bash` with
+  `run_in_background: true`. One completion event when the loop exits.
+- **Progress events while waiting (recommended for >60s waits)** → `Monitor`.
+  Each `echo` line in the loop becomes a notification; loop exit ends the
+  watch.
+
+### Canonical command (Bash run_in_background OR Monitor body)
+
+```bash
+end=$(( $(date +%s) + 300 ))
+until python .claude/skills/unreal-bridge/scripts/bridge.py --json --timeout 3 ping 2>/dev/null | grep -q '"ready": *true'; do
+  now=$(date +%s)
+  [ "$now" -ge "$end" ] && { echo "[wait] TIMEOUT (300s)"; exit 1; }
+  echo "[wait] editor not ready yet ($((end - now))s left)"
+  sleep 5
+done
+echo "[wait] editor READY"
+```
+
+Why each piece is load-bearing:
+
+- `--json … ping | grep '"ready": *true'` — the authoritative readiness signal
+  is the JSON `ready` key, **not** TCP success. A socket-up editor whose
+  MainFrame is still loading returns `success: true, ready: false` and rejects
+  every `exec` call. Checking only `ping`'s exit code is the #1 source of
+  "ready loop returned, first exec immediately failed".
+- `--timeout 3` — short per-attempt timeout so a single ping can't stall the
+  whole loop.
+- `until …; do …; sleep 5; done` — pings FIRST, sleeps between attempts. No
+  leading sleep, so the harness sleep-block doesn't bite.
+- `end=$(date +%s) + 300` deadline — caps total wait. Without this, a stuck
+  launch silently runs until Monitor's own 300s timeout (or forever for `Bash`
+  bg).
+- `echo "[wait] …"` inside the loop — gives Monitor a stdout line per attempt
+  to emit as an event. Without it, silence is indistinguishable from hang.
+- Final `echo "[wait] editor READY"` — the success notification you'll see in
+  chat.
+
+### Two invocations
+
+**Bash run_in_background** (one notification, no progress stream):
+
+```
+Bash(
+  command: <the canonical block above>,
+  run_in_background: true,
+  description: "Wait for UE editor ready",
+  timeout: 360000,
+)
+```
+
+**Monitor** (progress events every 5s, completion event on exit):
+
+```
+Monitor(
+  description: "UE editor ready-poll",
+  command: <the canonical block above>,
+  timeout_ms: 360000,
+  persistent: false,
+)
+```
+
+### After the wait exits
+
+Always do **one foreground** `bridge.py ping` (or trivial `exec`) before the
+real work. The bg/Monitor success is past tense — confirm in *this* turn that
+the bridge still answers before issuing meaningful state changes.
+
+### When >1 editors might be up
+
+Add `--project=<name>` (or `UNREAL_BRIDGE_PROJECT` env) to the ping inside the
+loop, otherwise discovery may latch onto the wrong editor and report ready for
+something you didn't launch.
+
+### When NOT to write this loop
+
+`rebuild_relaunch.py` already polls internally (text says
+`[rebuild] bridge is ready.` on success). Don't wrap the script in another
+wait loop — just run it and read its exit code.
 
 ## Bridge CLI
 
