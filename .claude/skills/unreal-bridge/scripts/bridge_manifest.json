@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-05-08T17:13:50+00:00",
+  "generated_at": "2026-05-22T16:07:54+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -19842,6 +19842,256 @@
         }
       }
     },
+    "UnrealBridgeStructLibrary": {
+      "functions": {
+        "add_struct_variable": {
+          "doc": "X.add_struct_variable(struct_path, name, type_string, default_value) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "name",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "type_string",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "default_value",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "change_struct_variable_type": {
+          "doc": "X.change_struct_variable_type(struct_path, name, new_type_string) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "name",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "new_type_string",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "create_user_defined_struct": {
+          "doc": "X.create_user_defined_struct(asset_path) -> BridgeStructCreateResult",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "asset_path",
+              "type": ""
+            }
+          ],
+          "returns": "BridgeStructCreateResult"
+        },
+        "get_struct_info": {
+          "doc": "X.get_struct_info(struct_path) -> BridgeStructInfo",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_path",
+              "type": ""
+            }
+          ],
+          "returns": "BridgeStructInfo"
+        },
+        "get_struct_variables": {
+          "doc": "X.get_struct_variables(struct_path) -> Array[BridgeStructVariableInfo]",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_path",
+              "type": ""
+            }
+          ],
+          "returns": "Array[BridgeStructVariableInfo]"
+        },
+        "move_struct_variable": {
+          "doc": "X.move_struct_variable(struct_path, name, new_index) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "name",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "new_index",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "remove_struct_variable": {
+          "doc": "X.remove_struct_variable(struct_path, name) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "name",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "rename_struct_variable": {
+          "doc": "X.rename_struct_variable(struct_path, old_name, new_name) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "old_name",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "new_name",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "set_struct_tooltip": {
+          "doc": "X.set_struct_tooltip(struct_path, tooltip) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "tooltip",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "set_struct_variable_default": {
+          "doc": "X.set_struct_variable_default(struct_path, name, default_value) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "name",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "default_value",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "set_struct_variable_edit_on_instance": {
+          "doc": "X.set_struct_variable_edit_on_instance(struct_path, name, edit_on_instance) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "name",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "edit_on_instance",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "set_struct_variable_tooltip": {
+          "doc": "X.set_struct_variable_tooltip(struct_path, name, tooltip=\"── Metadata ───────────────────────────────────────────────\") -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "struct_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "name",
+              "type": ""
+            },
+            {
+              "default": "\"── Metadata ───────────────────────────────────────────────\"",
+              "has_default": true,
+              "name": "tooltip",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        }
+      }
+    },
     "UnrealBridgeUMGLibrary": {
       "functions": {
         "get_widget_animations": {
@@ -21634,6 +21884,25 @@
       "loaded",
       "package_name",
       "visible"
+    ],
+    "BridgeStructCreateResult": [
+      "error",
+      "path",
+      "success"
+    ],
+    "BridgeStructInfo": [
+      "path",
+      "status",
+      "tooltip",
+      "variable_count"
+    ],
+    "BridgeStructVariableInfo": [
+      "default_value",
+      "edit_on_instance",
+      "guid",
+      "name",
+      "tooltip",
+      "type_string"
     ],
     "BridgeTagRedirectEntry": [
       "new_tag",

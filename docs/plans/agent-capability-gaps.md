@@ -2,7 +2,7 @@
 
 盘点 UnrealBridge 作为 agent ↔ UE 编辑器桥梁的能力缺口，按"能补 / 代价高但理论可行 / 根本补不了"三档划分。用于指导后续投资方向。
 
-最后更新：2026-04-20（已交付：A1-#2 GBuffer + A1-#3 Perf 快照 + A7-#28 TODO 审计 + A12-#45 Bridge 调用日志 + A12-#46 Signature registry dump + A11-#42 Webhook 通知）
+最后更新：2026-05-22（A2-#10b UserDefinedStruct 写交付；前序已交付：A1-#2 GBuffer + A1-#3 Perf 快照 + A7-#28 TODO 审计 + A12-#45 Bridge 调用日志 + A12-#46 Signature registry dump + A11-#42 Webhook 通知 + A2-#8 AnimGraph/SM 写 + A2-#9 GA/GE/GC 配置）
 
 ---
 
@@ -46,6 +46,7 @@ Bridge 已覆盖的主要领域（详见各 `bridge-*-api.md`）：
 | 8 | **AnimGraph / 状态机写** ✅ | — | — | **已交付 2026-04-21**：`UnrealBridgeAnimLibrary` 新增 24 个写 op — `list_anim_graphs`（全 ABP 图遍历 + 分类 AnimGraph/StateMachine/State/Conduit/TransitionRule）+ 9 个 AnimGraph 节点工厂（SequencePlayer / BlendSpacePlayer / Slot / StateMachine / LayeredBoneBlend / BlendListByBool/Int / TwoWayBlend / LinkedAnimLayer + `by_class_name` 兜底）+ 5 个 pin/node 操作（connect / disconnect / remove / set_position / set_sequence / set_slot_name）+ 8 个状态机内部 op（add/remove state/conduit/transition + 默认状态 + 重命名 + 属性调整 + 常量规则捷径）+ `auto_layout_anim_graph`（pose-flow 分层）/ `auto_layout_state_machine`（grid + 递归入每个 state/transition 内图）。`UAnimStateTransitionNode::PinConnectionListChanged` 自杀问题用 `CreateConnections` 原子化规避；`SetLayerName` 未导出用 `Node.Layer` 字段直写。 |
 | 9 | **GameplayAbility / GameplayEffect / GameplayCue 图编辑** ✅ | — | — | **GA 全交付 2026-04-20**（M1 CDO + M2 图节点 + M3 工厂）；**GE + GC 配置交付 2026-04-21**：通用 `recompile_blueprint`（与 save 解耦）+ GE 七个 helper（`set_ge_scalable_float_field` / `add_ge_modifier_scalable` / `remove_ge_modifier` / `clear_ge_modifiers` / `add_ge_component` / `remove_ge_components_by_class` / `set_ge_component_inherited_tags`）+ GC `set_gameplay_cue_tag`。设计原则：top-level CDO 字段走 Python `set_editor_property`，被 EditDefaultsOnly+protected 挡住的（magnitude wrappers / GEComponent 内部字段 / GameplayCueTag）走 C++ helper。 |
 | 10 | **Control Rig / IK Rig / IK Retargeter** | 大 | 中 | 零覆盖。跨骨架重定向每次人工。`URigBlueprint` + `FRigHierarchy` 编辑，UE 官方也在快速迭代，API 面偏不稳。 |
+| 10b | **UserDefinedStruct 写** ✅ | — | — | **已交付 2026-05-22**：新增 `UnrealBridgeStructLibrary`（22 个库 → 22 个库 +UDS，1033 UFUNCTION）。`create_user_defined_struct` 走 `UserDefinedStructureFactory` + `AssetTools::CreateAsset`；字段 CRUD 全套（add / remove / rename / change_type / set_default / move）走 `FStructureEditorUtils`；元数据 op (tooltip × 2、edit_on_instance) 用 `ChangeVariableTooltip` / `ChangeTooltip` / `ChangeEditableOnBPInstance` 官方 API。底层 `UserDefinedStructureFactory` 与 `StructureEditorUtils` 在 native Python 都没暴露 —— 这是程序化构造 DataTable rowtype + BP 变量类型的唯一通路。`ParseTypeString` 已抽到 `UnrealBridgeTypeParse` 共用模块，BP 库 5 处调用一并改造 —— 后续给 BP 变量加 Set/Map/Enum 类型支持会同时惠及 struct 字段。|
 
 ### A3. 运行时观测 / 调试
 

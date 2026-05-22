@@ -1,6 +1,7 @@
 #include "UnrealBridgeBlueprintLibrary.h"
 #include "Misc/EngineVersionComparison.h"
 #include "UnrealBridgeCompat.h"
+#include "UnrealBridgeTypeParse.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/SimpleConstructionScript.h"
@@ -1343,119 +1344,8 @@ TArray<FBridgeTimelineInfo> UUnrealBridgeBlueprintLibrary::GetTimelineInfo(
 }
 
 // ─── Type string parser ─────────────────────────────────────
-
-static bool ParseTypeString(const FString& TypeStr, FEdGraphPinType& OutPinType)
-{
-	OutPinType = FEdGraphPinType();
-
-	FString Type = TypeStr.TrimStartAndEnd();
-
-	// Array prefix
-	static const FString ArrayPrefix = TEXT("Array of ");
-	if (Type.StartsWith(ArrayPrefix))
-	{
-		Type = Type.Mid(ArrayPrefix.Len());
-		OutPinType.ContainerType = EPinContainerType::Array;
-	}
-
-	if (Type.Equals(TEXT("Bool"), ESearchCase::IgnoreCase) || Type.Equals(TEXT("Boolean"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
-	}
-	else if (Type.Equals(TEXT("Byte"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Byte;
-	}
-	else if (Type.Equals(TEXT("Int"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Int;
-	}
-	else if (Type.Equals(TEXT("Int64"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Int64;
-	}
-	else if (Type.Equals(TEXT("Float"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Real;
-		OutPinType.PinSubCategory = TEXT("float");
-	}
-	else if (Type.Equals(TEXT("Double"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Real;
-		OutPinType.PinSubCategory = TEXT("double");
-	}
-	else if (Type.Equals(TEXT("String"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_String;
-	}
-	else if (Type.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Name;
-	}
-	else if (Type.Equals(TEXT("Text"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Text;
-	}
-	else if (Type.Equals(TEXT("Vector"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
-		OutPinType.PinSubCategoryObject = TBaseStructure<FVector>::Get();
-	}
-	else if (Type.Equals(TEXT("Rotator"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
-		OutPinType.PinSubCategoryObject = TBaseStructure<FRotator>::Get();
-	}
-	else if (Type.Equals(TEXT("Transform"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
-		OutPinType.PinSubCategoryObject = TBaseStructure<FTransform>::Get();
-	}
-	else if (Type.Equals(TEXT("LinearColor"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
-		OutPinType.PinSubCategoryObject = TBaseStructure<FLinearColor>::Get();
-	}
-	else if (Type.Equals(TEXT("GameplayTag"), ESearchCase::IgnoreCase))
-	{
-		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
-		OutPinType.PinSubCategoryObject = FindObject<UScriptStruct>(nullptr, TEXT("/Script/GameplayTags.GameplayTag"));
-	}
-	else
-	{
-		// Try as struct
-		UScriptStruct* FoundStruct = FindObject<UScriptStruct>(nullptr, *Type);
-		if (!FoundStruct)
-			FoundStruct = FindObject<UScriptStruct>(nullptr, *(FString(TEXT("/Script/CoreUObject.")) + Type));
-		if (!FoundStruct)
-			FoundStruct = FindObject<UScriptStruct>(nullptr, *(FString(TEXT("/Script/Engine.")) + Type));
-
-		if (FoundStruct)
-		{
-			OutPinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
-			OutPinType.PinSubCategoryObject = FoundStruct;
-			return true;
-		}
-
-		// Try as class (object reference)
-		UClass* FoundClass = FindObject<UClass>(nullptr, *Type);
-		if (!FoundClass)
-			FoundClass = FindObject<UClass>(nullptr, *(FString(TEXT("/Script/Engine.")) + Type));
-		if (!FoundClass)
-			FoundClass = FindObject<UClass>(nullptr, *(FString(TEXT("/Script/CoreUObject.")) + Type));
-
-		if (FoundClass)
-		{
-			OutPinType.PinCategory = UEdGraphSchema_K2::PC_Object;
-			OutPinType.PinSubCategoryObject = FoundClass;
-			return true;
-		}
-
-		return false;
-	}
-
-	return true;
-}
+// (Moved to UnrealBridgeTypeParse.{h,cpp} so UnrealBridgeStructLibrary
+//  can reuse the same parse/serialize logic for UserDefinedStruct fields.)
 
 // ─── SetBlueprintVariableDefault ────────────────────────────
 
@@ -1562,7 +1452,7 @@ bool UUnrealBridgeBlueprintLibrary::AddBlueprintVariable(
 	}
 
 	FEdGraphPinType PinType;
-	if (!ParseTypeString(TypeString, PinType))
+	if (!BridgeTypeParseImpl::ParseTypeString(TypeString, PinType))
 		return false;
 
 	bool bSuccess = FBlueprintEditorUtils::AddMemberVariable(BP, VarName, PinType, DefaultValue);
@@ -1719,7 +1609,7 @@ bool UUnrealBridgeBlueprintLibrary::AddFunctionLocalVariable(
 	}
 
 	FEdGraphPinType PinType;
-	if (!ParseTypeString(TypeString, PinType)) return false;
+	if (!BridgeTypeParseImpl::ParseTypeString(TypeString, PinType)) return false;
 
 	// FBlueprintEditorUtils::AddLocalVariable handles the full propagation
 	// (entry-node modify, MarkBlueprintAsModified, variable visibility).
@@ -2644,7 +2534,7 @@ bool UUnrealBridgeBlueprintLibrary::AddFunctionParameter(
 	if (!Graph) return false;
 
 	FEdGraphPinType PinType;
-	if (!ParseTypeString(TypeString, PinType)) return false;
+	if (!BridgeTypeParseImpl::ParseTypeString(TypeString, PinType)) return false;
 
 	UK2Node_EditablePinBase* Target = bIsReturn
 		? static_cast<UK2Node_EditablePinBase*>(BridgeBpP0Impl::FindOrCreateFunctionResult(Graph, BP))
@@ -2944,7 +2834,7 @@ bool UUnrealBridgeBlueprintLibrary::SetVariableType(
 	if (FBlueprintEditorUtils::FindNewVariableIndex(BP, VarName) == INDEX_NONE) return false;
 
 	FEdGraphPinType NewType;
-	if (!ParseTypeString(NewTypeString, NewType)) return false;
+	if (!BridgeTypeParseImpl::ParseTypeString(NewTypeString, NewType)) return false;
 
 	FBlueprintEditorUtils::ChangeMemberVariableType(BP, VarName, NewType);
 	FKismetEditorUtilities::CompileBlueprint(BP);
@@ -11364,7 +11254,7 @@ bool UUnrealBridgeBlueprintLibrary::ChangeVariableTypeWithReport(
 	if (FBlueprintEditorUtils::FindNewVariableIndex(BP, VarName) == INDEX_NONE) return false;
 
 	FEdGraphPinType NewType;
-	if (!ParseTypeString(NewTypeString, NewType)) return false;
+	if (!BridgeTypeParseImpl::ParseTypeString(NewTypeString, NewType)) return false;
 
 	// FBlueprintEditorUtils::ChangeMemberVariableType pops a suppressible
 	// modal ("this could break connections — continue?") whenever the

@@ -16,7 +16,7 @@ structural rather than mnemonic.
 
 import unreal
 
-_GENERATED_AT = '2026-05-08T17:13:50+00:00'
+_GENERATED_AT = '2026-05-22T16:07:54+00:00'
 _UE_VERSION = '5.7.1-48512491+++UE5+Release-5.7'
 
 class Anim:
@@ -5167,6 +5167,70 @@ class Reactive:
     def unregister(*, handler_id):
         """X.unregister(handler_id) -> bool"""
         return unreal.UnrealBridgeReactiveLibrary.unregister(handler_id)
+
+
+class Struct:
+    """Wraps unreal.UnrealBridgeStructLibrary (kwargs-only)."""
+
+    @staticmethod
+    def add_struct_variable(*, struct_path, name, type_string, default_value):
+        """X.add_struct_variable(struct_path, name, type_string, default_value) -> bool"""
+        return unreal.UnrealBridgeStructLibrary.add_struct_variable(struct_path, name, type_string, default_value)
+
+    @staticmethod
+    def change_struct_variable_type(*, struct_path, name, new_type_string):
+        """X.change_struct_variable_type(struct_path, name, new_type_string) -> bool"""
+        return unreal.UnrealBridgeStructLibrary.change_struct_variable_type(struct_path, name, new_type_string)
+
+    @staticmethod
+    def create_user_defined_struct(*, asset_path):
+        """X.create_user_defined_struct(asset_path) -> BridgeStructCreateResult"""
+        return unreal.UnrealBridgeStructLibrary.create_user_defined_struct(asset_path)
+
+    @staticmethod
+    def get_struct_info(*, struct_path):
+        """X.get_struct_info(struct_path) -> BridgeStructInfo"""
+        return unreal.UnrealBridgeStructLibrary.get_struct_info(struct_path)
+
+    @staticmethod
+    def get_struct_variables(*, struct_path):
+        """X.get_struct_variables(struct_path) -> Array[BridgeStructVariableInfo]"""
+        return unreal.UnrealBridgeStructLibrary.get_struct_variables(struct_path)
+
+    @staticmethod
+    def move_struct_variable(*, struct_path, name, new_index):
+        """X.move_struct_variable(struct_path, name, new_index) -> bool"""
+        return unreal.UnrealBridgeStructLibrary.move_struct_variable(struct_path, name, new_index)
+
+    @staticmethod
+    def remove_struct_variable(*, struct_path, name):
+        """X.remove_struct_variable(struct_path, name) -> bool"""
+        return unreal.UnrealBridgeStructLibrary.remove_struct_variable(struct_path, name)
+
+    @staticmethod
+    def rename_struct_variable(*, struct_path, old_name, new_name):
+        """X.rename_struct_variable(struct_path, old_name, new_name) -> bool"""
+        return unreal.UnrealBridgeStructLibrary.rename_struct_variable(struct_path, old_name, new_name)
+
+    @staticmethod
+    def set_struct_tooltip(*, struct_path, tooltip):
+        """X.set_struct_tooltip(struct_path, tooltip) -> bool"""
+        return unreal.UnrealBridgeStructLibrary.set_struct_tooltip(struct_path, tooltip)
+
+    @staticmethod
+    def set_struct_variable_default(*, struct_path, name, default_value):
+        """X.set_struct_variable_default(struct_path, name, default_value) -> bool"""
+        return unreal.UnrealBridgeStructLibrary.set_struct_variable_default(struct_path, name, default_value)
+
+    @staticmethod
+    def set_struct_variable_edit_on_instance(*, struct_path, name, edit_on_instance):
+        """X.set_struct_variable_edit_on_instance(struct_path, name, edit_on_instance) -> bool"""
+        return unreal.UnrealBridgeStructLibrary.set_struct_variable_edit_on_instance(struct_path, name, edit_on_instance)
+
+    @staticmethod
+    def set_struct_variable_tooltip(*, struct_path, name, tooltip="── Metadata ───────────────────────────────────────────────"):
+        """X.set_struct_variable_tooltip(struct_path, name, tooltip="── Metadata ───────────────────────────────────────────────") -> bool"""
+        return unreal.UnrealBridgeStructLibrary.set_struct_variable_tooltip(struct_path, name, tooltip)
 
 
 class UMG:
