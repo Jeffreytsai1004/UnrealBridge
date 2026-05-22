@@ -139,9 +139,12 @@ def get_editor_info_for_uproject(uproject: pathlib.Path,
     """
     target = uproject.resolve()
     try:
+        # `--discovery-timeout` is a global parent-parser flag; it must come
+        # BEFORE the `list-editors` subcommand or argparse rejects it.
         proc = subprocess.run(
-            [sys.executable, str(BRIDGE_PY), "--json", "list-editors",
-             "--discovery-timeout", str(discovery_timeout_ms)],
+            [sys.executable, str(BRIDGE_PY),
+             "--json", "--discovery-timeout", str(discovery_timeout_ms),
+             "list-editors"],
             capture_output=True, text=True, timeout=10,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):

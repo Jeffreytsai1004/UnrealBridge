@@ -369,7 +369,12 @@ def _cli() -> int:
 
     cmd = [sys.executable, bridge, "--json", "exec-file", os.path.abspath(__file__)]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout)
+        # Force UTF-8 + replace on decode errors. `text=True` alone defaults to
+        # the active locale (GBK on zh-CN Windows), which dies on the UTF-8
+        # bytes UE Python emits for non-ASCII docstrings or log lines.
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             encoding="utf-8", errors="replace",
+                             timeout=args.timeout)
     except subprocess.TimeoutExpired:
         print(f"ERROR: bridge call timed out after {args.timeout}s", file=sys.stderr)
         return 1
