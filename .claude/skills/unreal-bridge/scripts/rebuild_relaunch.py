@@ -88,6 +88,13 @@ def find_uproject(project_dir: pathlib.Path) -> pathlib.Path | None:
 
 
 def is_editor_running() -> bool:
+    """True if ANY UnrealEditor.exe is running on the machine.
+
+    Used as a coarse signal — for project-aware shutdown the caller should
+    resolve the target editor's PID via `get_editor_pid_for_uproject` and
+    use `is_pid_running(pid)` instead, so we never wipe a sibling project's
+    editor.
+    """
     try:
         out = subprocess.check_output(
             ["tasklist", "/FI", "IMAGENAME eq UnrealEditor.exe", "/NH"],
@@ -98,8 +105,67 @@ def is_editor_running() -> bool:
     return "UnrealEditor.exe" in out
 
 
-def quit_editor_gracefully(timeout_s: float) -> bool:
-    """Try bridge.exec('quit_editor()'); fall back to TerminateProcess."""
+def is_pid_running(pid: int) -> bool:
+    """True iff a process with the given PID is currently running."""
+    if pid <= 0:
+        return False
+    try:
+        out = subprocess.check_output(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+    # `tasklist` prints "INFO: No tasks are running which match the specified
+    # criteria." on miss (returncode still 0). Match the literal PID instead.
+    return str(pid) in out and "INFO:" not in out
+
+
+def get_editor_pid_for_uproject(uproject: pathlib.Path,
+                                discovery_timeout_ms: int = 1500) -> "int | None":
+    """Query bridge discovery; return PID of the editor whose project_path
+    matches the given .uproject. Returns None on discovery failure or no match.
+
+    This is how we keep multi-editor setups safe: the .uproject path uniquely
+    identifies our target, and `Endpoint.pid` (from the discovery response)
+    lets us tasklist / taskkill by PID instead of imagename.
+    """
+    target = uproject.resolve()
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(BRIDGE_PY), "list-editors", "--json",
+             "--discovery-timeout", str(discovery_timeout_ms)],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        eps = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    for ep in eps:
+        ep_project_raw = ep.get("project_path") or ""
+        if not ep_project_raw:
+            continue
+        try:
+            if pathlib.Path(ep_project_raw).resolve() == target:
+                pid = int(ep.get("pid") or 0)
+                return pid if pid > 0 else None
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def quit_editor_gracefully(timeout_s: float,
+                           target_pid: "int | None" = None) -> bool:
+    """Try bridge.exec('quit_editor()'); wait for the target editor to exit.
+
+    When `target_pid` is given, the wait loop polls only that PID — sibling
+    editors running other projects are ignored. When None, falls back to the
+    legacy global imagename check (kept for back-compat / discovery-failed paths).
+    """
     script = (
         "import unreal\n"
         "try:\n"
@@ -113,13 +179,33 @@ def quit_editor_gracefully(timeout_s: float) -> bool:
     )
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        if not is_editor_running():
-            return True
+        if target_pid is not None:
+            if not is_pid_running(target_pid):
+                return True
+        else:
+            if not is_editor_running():
+                return True
         time.sleep(0.5)
     return False
 
 
+def force_kill_pid(pid: int) -> None:
+    """taskkill /F /PID <pid> + brief wait for exit."""
+    if pid <= 0:
+        return
+    subprocess.run(
+        ["taskkill", "/F", "/PID", str(pid)],
+        capture_output=True, text=True,
+    )
+    for _ in range(20):
+        if not is_pid_running(pid):
+            return
+        time.sleep(0.25)
+
+
 def force_kill_editor() -> None:
+    """Global taskkill of every UnrealEditor.exe — opt-in via --allow-global-kill
+    only. Kills sibling editors running other projects; do not use casually."""
     subprocess.run(
         ["taskkill", "/F", "/IM", "UnrealEditor.exe"],
         capture_output=True, text=True,
@@ -255,6 +341,11 @@ def main() -> int:
                     help="Seconds to wait for graceful editor quit (default: 30).")
     ap.add_argument("--verbose", action="store_true",
                     help="Stream sync/build output to stdout.")
+    ap.add_argument("--allow-global-kill", action="store_true",
+                    help="If graceful quit fails and we couldn't match this "
+                         "editor's PID via discovery, fall back to taskkill "
+                         "/F /IM UnrealEditor.exe (kills ALL editor instances). "
+                         "Off by default — multi-editor setups would lose work.")
     args = ap.parse_args()
 
     # Resolve project dir
@@ -296,15 +387,49 @@ def main() -> int:
         sys.stderr.write(f"UnrealEditor.exe not found at {editor_exe}\n")
         return 5
 
-    # 1+2: shut the editor down
-    if is_editor_running():
-        print(f"[rebuild] editor is running — asking it to quit ...")
-        if not quit_editor_gracefully(args.quit_timeout):
-            print("[rebuild] graceful quit timed out — force killing.")
-            force_kill_editor()
-        if is_editor_running():
-            sys.stderr.write("Editor still running after taskkill — aborting.\n")
+    # 1+2: shut the editor down — project-aware so we never wipe sibling
+    # editors running other projects.
+    target_pid = get_editor_pid_for_uproject(uproject)
+
+    if target_pid is not None:
+        print(f"[rebuild] this project's editor PID = {target_pid}")
+        if is_pid_running(target_pid):
+            print(f"[rebuild] editor is running — asking it to quit ...")
+            if not quit_editor_gracefully(args.quit_timeout, target_pid):
+                print(f"[rebuild] graceful quit timed out — taskkill /F /PID {target_pid}")
+                force_kill_pid(target_pid)
+            if is_pid_running(target_pid):
+                sys.stderr.write(
+                    f"Editor (PID {target_pid}) still running after taskkill — aborting.\n"
+                )
+                return 6
+    elif is_editor_running():
+        # Editor(s) running but discovery couldn't match this uproject.
+        # Causes: VPN dropping multicast, editor still on splash, token
+        # mismatch. Refuse to kill blindly — would risk sibling projects.
+        if args.allow_global_kill:
+            print("[rebuild] discovery couldn't match this uproject; "
+                  "--allow-global-kill set — falling back to global quit.")
+            if not quit_editor_gracefully(args.quit_timeout, None):
+                print("[rebuild] graceful quit timed out — global force kill.")
+                force_kill_editor()
+            if is_editor_running():
+                sys.stderr.write("Editor still running after taskkill — aborting.\n")
+                return 6
+        else:
+            sys.stderr.write(
+                "[rebuild] An UnrealEditor.exe is running but discovery could "
+                "not match it to this project (.uproject:\n"
+                f"  {uproject}\n"
+                "Refusing to force-kill UnrealEditor.exe blindly — would close "
+                "sibling editors running other projects.\n"
+                "Either: (a) manually close the editor for this project and "
+                "rerun; (b) wait for it to finish loading past the splash if "
+                "it's still starting; (c) pass --allow-global-kill if you're "
+                "sure no other editor instances are running.\n"
+            )
             return 6
+    # else: no UE editor running at all — nothing to shut down, fall through.
 
     # 3: sync
     if not args.no_sync:
