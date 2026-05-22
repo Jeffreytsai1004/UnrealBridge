@@ -16,7 +16,9 @@ Create and edit `UUserDefinedStruct` (UDS) assets — the user-defined struct su
 
 ## Type strings (shared with `add_blueprint_variable`)
 
-The `type_string` argument accepted by `add_struct_variable` / `change_struct_variable_type` uses the same parser as `UnrealBridgeBlueprintLibrary.add_blueprint_variable`. Canonical forms (case-insensitive):
+The `type_string` argument accepted by `add_struct_variable` / `change_struct_variable_type` uses the same parser as `UnrealBridgeBlueprintLibrary.add_blueprint_variable`. Canonical forms (case-insensitive). Nested forms compose (e.g. `Array of SoftObject<Texture2D>`).
+
+### Primitives
 
 | Form | Maps to |
 |---|---|
@@ -25,12 +27,45 @@ The `type_string` argument accepted by `add_struct_variable` / `change_struct_va
 | `"Int"` / `"Int64"` | `PC_Int` / `PC_Int64` |
 | `"Float"` / `"Double"` | `PC_Real` with float/double subcategory |
 | `"String"` / `"Name"` / `"Text"` | `PC_String` / `PC_Name` / `PC_Text` |
-| `"Vector"` / `"Rotator"` / `"Transform"` / `"LinearColor"` / `"GameplayTag"` | `PC_Struct` with the canonical engine struct |
-| any `UScriptStruct` simple name (e.g. `"MyDataStruct"`, `"BridgeAssetInfo"`) | `PC_Struct` after lookup in `/Script/CoreUObject.` / `/Script/Engine.` |
-| any `UClass` simple name (e.g. `"Actor"`, `"StaticMesh"`) | `PC_Object` reference |
-| `"Array of <type>"` prefix | wraps the above as a `TArray` |
 
-Not currently supported in `type_string`: Set / Map containers, enum types, soft-object refs. Extending the parser also extends `add_blueprint_variable`.
+### Engine struct aliases
+
+| Form | Maps to |
+|---|---|
+| `"Vector"` / `"Vector2D"` / `"Vector4"` | `FVector` / `FVector2D` / `FVector4` |
+| `"IntPoint"` / `"IntVector"` | `FIntPoint` / `FIntVector` |
+| `"Rotator"` / `"Transform"` / `"Quat"` | `FRotator` / `FTransform` / `FQuat` |
+| `"LinearColor"` / `"Color"` | `FLinearColor` / `FColor` (sRGB byte) |
+| `"DateTime"` / `"Guid"` | `FDateTime` / `FGuid` |
+| `"GameplayTag"` / `"GameplayTagContainer"` | engine GameplayTags structs |
+| any `UScriptStruct` simple name (e.g. `"MyDataStruct"`) | resolved by name across CoreUObject / Engine / GameplayTags namespaces, then a global `UScriptStruct` sweep |
+
+### Reference types
+
+| Form | Maps to |
+|---|---|
+| `"Object<ClassName>"` or bare `"ClassName"` | `PC_Object` — hard reference to a UObject of `ClassName` |
+| `"Class<ClassName>"` | `PC_Class` — `TSubclassOf<ClassName>` (class itself, not instance) |
+| `"SoftObject<ClassName>"` | `PC_SoftObject` — `TSoftObjectPtr<ClassName>` |
+| `"SoftClass<ClassName>"` | `PC_SoftClass` — `TSoftClassPtr<ClassName>` |
+| `"Interface<InterfaceName>"` | `PC_Interface` — must resolve to a UClass with `CLASS_Interface` flag |
+| `"Enum<EnumName>"` or bare `"EnumName"` | `PC_Byte` with `UEnum` sub-object — works for any reflected `UENUM(BlueprintType)` |
+
+Class / enum / interface lookups try common namespace prefixes first (`/Script/Engine.`, `/Script/CoreUObject.`); on miss, fall back to a `TObjectIterator` sweep over loaded `UClass` / `UEnum` so module-scoped names (e.g. `/Script/GameplayTags.GameplayTagAssetInterface`) resolve without a hard-coded prefix list.
+
+### Containers
+
+| Form | Container |
+|---|---|
+| `"Array of <type>"` or `"Array<type>"` | `TArray` |
+| `"Set of <type>"` or `"Set<type>"` | `TSet` (key type must be hashable per UE rules — Bool / Float / Double / Vector reject in editor) |
+| `"Map<key, value>"` or `"Map of <key> to <value>"` | `TMap` — same key-hashability rule applies to the key half |
+
+Containers do **not** nest (UE's pin system doesn't allow `TArray<TSet<>>`). Container values **can** be reference types (e.g. `Array of SoftObject<Texture2D>` is valid).
+
+### What's still missing
+
+`Wildcard`, delegate / multicast-delegate, and Verse-style enums are not yet parseable as `type_string`. Extending the parser benefits every surface that accepts a `type_string` (`add_blueprint_variable`, `add_blueprint_function_parameter`, `change_struct_variable_type`, ...) simultaneously.
 
 ## FBridgeStructVariableInfo
 
