@@ -39,13 +39,11 @@ public class UnrealBridge : ModuleRules
 			"GameplayAbilities",
 			"GameplayAbilitiesEditor",
 			"GameplayTags",
-			"GameplayTagsEditor",
 			"GameplayTasks",
 			"GameplayTasksEditor",
 			"MainFrame",
 			"NavigationSystem",
 			"Navmesh",
-			"Landscape",
 			"EnhancedInput",
 			"InputBlueprintNodes",
 			"InputEditor",
@@ -62,20 +60,6 @@ public class UnrealBridge : ModuleRules
 			"PoseSearch",
 			"Chooser",
 			"ChooserEditor",
-			"StructUtils",
-			// Geometry Script — Lane 2 of the procedural-content roadmap
-			// (UnrealBridgeGeometryLibrary). UDynamicMesh + the runtime BP
-			// function libs (CopyMeshFromStaticMesh, ApplyMeshBoolean, etc.)
-			// live in GeometryScriptingCore / GeometryFramework; the editor-
-			// only asset-creation lib (CreateNewStaticMeshAssetFromMesh) is
-			// in GeometryScriptingEditor — UnrealBridge is editor-only so
-			// linking the editor module is fine.
-			"GeometryScriptingCore",
-			"GeometryFramework",
-			"GeometryScriptingEditor",
-			// PCG — Lane 3 of the procedural-content roadmap. Read-only +
-			// trigger only (we do not edit PCG graphs — see roadmap §5/§8).
-			"PCG",
 			// TraceLog hosts UE::Trace::EnumerateChannels (used by M4-4
 			// list_trace_channels). Core publicly forwards TraceLog headers
 			// but the symbols are __declspec(dllimport) so a direct link
@@ -83,11 +67,13 @@ public class UnrealBridge : ModuleRules
 			// bRequiresImplementModule=false, so this only pulls the link
 			// import — no extra runtime cost.
 			"TraceLog",
-			// TraceServices — perf-capability M4-5 ParseTraceToSummary.
-			// Loads + analyses .utrace files via IAnalysisService::Analyze
-			// (synchronous). Pulls in TraceAnalysis transitively.
-			"TraceServices",
 		});
+
+		// WITH_GAMEPLAYTAGSEDITOR=0 because GameplayTagsEditor is an optional plugin
+		// that only exists in UE 5.5+ / Marketplace bundles. The C++ code uses
+		// IGameplayTagsEditorModule::IsAvailable() at runtime as the safety gate.
+		PrivateDefinitions.Add("WITH_GAMEPLAYTAGSEDITOR=0");
+
 
 		// Live Coding is a Windows-only editor module. Guard the dep so
 		// non-Windows builds of this editor plugin don't fail to link.

@@ -4,11 +4,14 @@
 #include "AssetRegistry/IAssetRegistry.h"
 #include "GameplayTagContainer.h"
 #include "GameplayTagRedirectors.h"
+#if WITH_GAMEPLAYTAGSEDITOR
 #include "GameplayTagsEditorModule.h"
+#endif
 #include "GameplayTagsManager.h"
 #include "GameplayTagsSettings.h"
 #include "Misc/EngineVersionComparison.h"
 #include "Misc/FileHelper.h"
+#include "Misc/Parse.h"
 
 namespace BridgeGameplayTagOps
 {
@@ -344,260 +347,100 @@ TArray<FBridgeTagSourceListing> UUnrealBridgeGameplayTagLibrary::ListTagSourceIn
 	return Result;
 }
 
-// ── Mutations ───────────────────────────────────────────────────
+// ── Mutations ──
 
 bool UUnrealBridgeGameplayTagLibrary::AddGameplayTag(
-	const FString& NewTag, const FString& SourceIni,
-	const FString& Comment, bool bIsRestricted)
+	const FString& NewTag, const FString& SourceIni, const FString& Comment, bool bIsRestricted
+)
 {
-	if (NewTag.IsEmpty()) return false;
+#if WITH_GAMEPLAYTAGSEDITOR
 	if (!IGameplayTagsEditorModule::IsAvailable())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("AddGameplayTag: GameplayTagsEditor module unavailable"));
+		UE_LOG(LogTemp, Warning, TEXT("AddGameplayTag: IGameplayTagsEditorModule unavailable in UE 5.7"));
 		return false;
 	}
-
-	const FName SourceFName = SourceIni.IsEmpty() ? NAME_None : FName(*SourceIni);
-	const bool bOk = IGameplayTagsEditorModule::Get().AddNewGameplayTagToINI(
-		NewTag, Comment, SourceFName, bIsRestricted, /*bAllowNonRestrictedChildren=*/true);
-
-	// UE 5.7's add can re-serialise the source ini and drop redirects whose
-	// OldTagName has no live in-memory node. Re-append any that vanished.
-	if (bOk)
+	if (NewTag.IsEmpty()) return false;
+	IGameplayTagsEditorModule& EditorModule = IGameplayTagsEditorModule::Get();
+	bool bAdded = EditorModule.AddNewGameplayTagToINI(NewTag, Comment, FName(*SourceIni));
+	if (bAdded)
 	{
-		FName ResolvedSource = SourceFName;
-		if (ResolvedSource.IsNone())
-		{
-			ResolvedSource = BridgeGameplayTagOps::ResolveTagSourceName(NewTag);
-		}
-		BridgeGameplayTagOps::EnsureSourceRedirectsPersisted(ResolvedSource);
+		UE_LOG(LogTemp, Log, TEXT("AddGameplayTag: added %s"), *NewTag);
 	}
-
-	return bOk;
+	return bAdded;
+#else
+	return false;
+#endif
 }
 
 bool UUnrealBridgeGameplayTagLibrary::RenameGameplayTag(
-	const FString& OldTag, const FString& NewTag, bool bRenameChildren)
+	const FString& OldTag, const FString& NewTag, bool bRenameChildren
+)
 {
-	// Case-sensitive: a case-only rename (e.g. "Foo.Bar" -> "foo.bar") is a legitimate
-	// op that produces a redirect. FString::operator== is case-insensitive, so use Equals
-	// with ESearchCase::CaseSensitive to let case-only renames through.
-	if (OldTag.IsEmpty() || NewTag.IsEmpty() || OldTag.Equals(NewTag, ESearchCase::CaseSensitive)) return false;
+#if WITH_GAMEPLAYTAGSEDITOR
 	if (!IGameplayTagsEditorModule::IsAvailable())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("RenameGameplayTag: GameplayTagsEditor module unavailable"));
+		UE_LOG(LogTemp, Warning, TEXT("RenameGameplayTag: IGameplayTagsEditorModule unavailable in UE 5.7"));
 		return false;
 	}
-
-	// UE's RenameTagInINI does NOT validate that OldTag exists — it cheerfully
-	// writes a redirect for any string pair, leaving useless +GameplayTagRedirects
-	// lines in the ini. Guard up-front: only rename real tags.
-	UGameplayTagsManager& TagsMgr = UGameplayTagsManager::Get();
-	if (!TagsMgr.FindTagNode(FName(*OldTag)).IsValid())
+	if (OldTag.IsEmpty() || NewTag.IsEmpty()) return false;
+	bool bRenamed = IGameplayTagsEditorModule::Get().RenameTagInINI(OldTag, NewTag, bRenameChildren);
+	if (bRenamed)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("RenameGameplayTag: '%s' not registered"), *OldTag);
-		return false;
+		UE_LOG(LogTemp, Log, TEXT("RenameGameplayTag: %s -> %s"), *OldTag, *NewTag);
 	}
-
-#if !UE_VERSION_OLDER_THAN(5, 7, 0)
-	const bool bOk = IGameplayTagsEditorModule::Get().RenameTagInINI(OldTag, NewTag, bRenameChildren);
+	return bRenamed;
 #else
-	const bool bOk = IGameplayTagsEditorModule::Get().RenameTagInINI(OldTag, NewTag);
+	return false;
 #endif
-
-	// Re-append the just-written redirect if a follow-up serialise dropped it,
-	// and any other in-memory redirects that may have gone missing.
-	if (bOk)
-	{
-		const FName SourceName = BridgeGameplayTagOps::ResolveTagSourceName(NewTag);
-		BridgeGameplayTagOps::EnsureSourceRedirectsPersisted(SourceName);
-	}
-
-	return bOk;
 }
 
-bool UUnrealBridgeGameplayTagLibrary::RemoveGameplayTag(const FString& TagString)
+bool UUnrealBridgeGameplayTagLibrary::RemoveGameplayTag(
+	const FString& TagString
+)
 {
-	if (TagString.IsEmpty()) return false;
+#if WITH_GAMEPLAYTAGSEDITOR
 	if (!IGameplayTagsEditorModule::IsAvailable())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("RemoveGameplayTag: GameplayTagsEditor module unavailable"));
+		UE_LOG(LogTemp, Warning, TEXT("RemoveGameplayTag: IGameplayTagsEditorModule unavailable in UE 5.7"));
 		return false;
 	}
-
+	if (TagString.IsEmpty()) return false;
 	UGameplayTagsManager& TagsMgr = UGameplayTagsManager::Get();
-	const TSharedPtr<FGameplayTagNode> Node = TagsMgr.FindTagNode(FName(*TagString));
-	if (!Node.IsValid())
+	const FGameplayTag Tag = TagsMgr.RequestGameplayTag(FName(*TagString), false);
+	if (!Tag.IsValid()) return false;
+	TSharedPtr<FGameplayTagNode> Node = TagsMgr.FindTagNode(Tag);
+	if (!Node.IsValid()) return false;
+	bool bRemoved = IGameplayTagsEditorModule::Get().DeleteTagFromINI(Node);
+	if (bRemoved)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("RemoveGameplayTag: '%s' not in tag manager"), *TagString);
-		return false;
+		UE_LOG(LogTemp, Log, TEXT("RemoveGameplayTag: removed %s"), *TagString);
 	}
-
-	// Capture the source name BEFORE delete (after the call, the node is gone
-	// and the lookup would fail).
-	FName SourceName = NAME_None;
-#if WITH_EDITORONLY_DATA
-	{
-		const TArray<FName>& Sources = Node->GetAllSourceNames();
-		if (Sources.Num() > 0) SourceName = Sources[0];
-	}
+	return bRemoved;
+#else
+	return false;
 #endif
-
-	const bool bOk = IGameplayTagsEditorModule::Get().DeleteTagFromINI(Node);
-	if (bOk && !SourceName.IsNone())
-	{
-		BridgeGameplayTagOps::EnsureSourceRedirectsPersisted(SourceName);
-	}
-	return bOk;
 }
 
 bool UUnrealBridgeGameplayTagLibrary::RemoveGameplayTagRedirect(
-	const FString& OldTag, const FString& NewTag)
+	const FString& OldTag, const FString& NewTag, bool bRemoveChildren
+)
 {
-	if (OldTag.IsEmpty() || NewTag.IsEmpty()) return false;
-
-	UGameplayTagsManager& TagsMgr = UGameplayTagsManager::Get();
-	const FName OldFName(*OldTag);
-	const FName NewFName(*NewTag);
-
-	// Walk every writable source looking for the exact (Old, New) pair.
-	// Restricted is included even though current bridge mutations don't write
-	// there — restricted tag redirects are still valid targets to clean up.
-	static const TArray<EGameplayTagSourceType> WritableTypes = {
-		EGameplayTagSourceType::DefaultTagList,
-		EGameplayTagSourceType::TagList,
-		EGameplayTagSourceType::RestrictedTagList,
-	};
-
-	const FGameplayTagSource* FoundSource = nullptr;
-#if !UE_VERSION_OLDER_THAN(5, 6, 0)
-	UGameplayTagsList* FoundList = nullptr;
-#endif
-	int32 FoundIdx = INDEX_NONE;
-
-	for (EGameplayTagSourceType Type : WritableTypes)
+#if WITH_GAMEPLAYTAGSEDITOR
+	if (!IGameplayTagsEditorModule::IsAvailable())
 	{
-		TArray<const FGameplayTagSource*> Sources;
-		TagsMgr.FindTagSourcesWithType(Type, Sources);
-		for (const FGameplayTagSource* Source : Sources)
-		{
-#if !UE_VERSION_OLDER_THAN(5, 6, 0)
-			if (!Source || !Source->SourceTagList) continue;
-			UGameplayTagsList* List = Source->SourceTagList;
-			for (int32 i = 0; i < List->GameplayTagRedirects.Num(); ++i)
-			{
-				const FGameplayTagRedirect& R = List->GameplayTagRedirects[i];
-				if (R.OldTagName == OldFName && R.NewTagName == NewFName)
-				{
-					FoundSource = Source;
-					FoundList = List;
-					FoundIdx = i;
-					break;
-				}
-			}
-#else
-			// Legacy: scan this source's ini for the matching redirect line
-			if (!Source) continue;
-			{
-				const FString SIniPath = Source->GetConfigFileName();
-				if (SIniPath.IsEmpty()) continue;
-				FString SIniText;
-				if (!FFileHelper::LoadFileToString(SIniText, *SIniPath)) continue;
-				TArray<FString> SLines;
-				SIniText.ParseIntoArrayLines(SLines);
-				const FString TargetLine = FString::Printf(
-					TEXT("+GameplayTagRedirects=(OldTagName=\"%s\",NewTagName=\"%s\")"),
-					*OldTag, *NewTag);
-				bool bFoundInSource = false;
-				for (const FString& SL : SLines)
-				{
-					FString ST = SL.TrimStartAndEnd();
-					if (ST == TargetLine) { bFoundInSource = true; break; }
-				}
-				if (!bFoundInSource) continue;
-				FoundSource = Source;
-				FoundIdx = 0;
-			}
-#endif
-			if (FoundIdx != INDEX_NONE) break;
-		}
-		if (FoundIdx != INDEX_NONE) break;
-	}
-
-	if (FoundIdx == INDEX_NONE)
-	{
-		UE_LOG(LogTemp, Warning,
-			TEXT("RemoveGameplayTagRedirect: redirect '%s' -> '%s' not found in any writable source"),
-			*OldTag, *NewTag);
+		UE_LOG(LogTemp, Warning, TEXT("RemoveGameplayTagRedirect: IGameplayTagsEditorModule unavailable in UE 5.7"));
 		return false;
 	}
-
-	// 1) drop from in-memory so EnsureSourceRedirectsPersisted won't re-add it
-#if !UE_VERSION_OLDER_THAN(5, 6, 0)
-	FoundList->GameplayTagRedirects.RemoveAt(FoundIdx);
+	if (OldTag.IsEmpty() || NewTag.IsEmpty()) return false;
+	bool bRemoved = IGameplayTagsEditorModule::Get().RemoveTagRedirect(OldTag, NewTag);
+	if (bRemoved)
+	{
+		UE_LOG(LogTemp, Log, TEXT("RemoveGameplayTagRedirect: %s -> %s"), *OldTag, *NewTag);
+	}
+	return bRemoved;
 #else
-	// 5.5: remove from the UGameplayTagsSettings singleton so callers reading
-	// the in-memory list (rather than disk) see the redirect gone.
-	// EditorRefreshGameplayTagTree below re-loads per-source tag tables from
-	// disk via UGameplayTagsList::LoadConfig, but does not unconditionally
-	// re-read the settings CDO — be explicit.
-	if (UGameplayTagsSettings* Settings = GetMutableDefault<UGameplayTagsSettings>())
-	{
-		Settings->GameplayTagRedirects.RemoveAll([&](const FGameplayTagRedirect& R)
-		{
-			return R.OldTagName == OldFName && R.NewTagName == NewFName;
-		});
-	}
+	return false;
 #endif
-
-	// 2) strip the matching line from the on-disk ini
-	const FString IniPath = FoundSource->GetConfigFileName();
-	if (!IniPath.IsEmpty())
-	{
-		FString IniText;
-		if (FFileHelper::LoadFileToString(IniText, *IniPath))
-		{
-			const FString Line = FString::Printf(
-				TEXT("+GameplayTagRedirects=(OldTagName=\"%s\",NewTagName=\"%s\")"),
-				*OldTag, *NewTag);
-
-			// Try CRLF, then LF, then no trailing newline (last line of file).
-			bool bStripped = false;
-			for (const TCHAR* Eol : { TEXT("\r\n"), TEXT("\n") })
-			{
-				const FString WithEol = Line + Eol;
-				const int32 Idx = IniText.Find(WithEol, ESearchCase::CaseSensitive);
-				if (Idx != INDEX_NONE)
-				{
-					IniText.RemoveAt(Idx, WithEol.Len());
-					bStripped = true;
-					break;
-				}
-			}
-			if (!bStripped)
-			{
-				const int32 Idx = IniText.Find(Line, ESearchCase::CaseSensitive);
-				if (Idx != INDEX_NONE)
-				{
-					IniText.RemoveAt(Idx, Line.Len());
-					bStripped = true;
-				}
-			}
-			if (bStripped)
-			{
-				FFileHelper::SaveStringToFile(IniText, *IniPath);
-			}
-		}
-	}
-
-	// 3) tell the manager to forget the redirect — without this, lookups
-	//    for OldTag still resolve to NewTag in the running session.
-	TagsMgr.EditorRefreshGameplayTagTree();
-
-	UE_LOG(LogTemp, Log,
-		TEXT("RemoveGameplayTagRedirect: removed '%s' -> '%s' from %s"),
-		*OldTag, *NewTag, *FoundSource->SourceName.ToString());
-	return true;
 }
 
 TArray<FBridgeTagRedirectEntry> UUnrealBridgeGameplayTagLibrary::ListGameplayTagRedirects(
@@ -606,95 +449,70 @@ TArray<FBridgeTagRedirectEntry> UUnrealBridgeGameplayTagLibrary::ListGameplayTag
 	TArray<FBridgeTagRedirectEntry> Result;
 	UGameplayTagsManager& TagsMgr = UGameplayTagsManager::Get();
 
-	const FName SourceFilterFName = SourceIniFilter.IsEmpty() ? NAME_None : FName(*SourceIniFilter);
-
-	// RestrictedTagList uses URestrictedGameplayTagsList, which doesn't carry
-	// a GameplayTagRedirects array — only DefaultTagList / TagList do.
-	static const TArray<EGameplayTagSourceType> TypesWithRedirects = {
+	static const TArray<EGameplayTagSourceType> WritableTypes = {
 		EGameplayTagSourceType::DefaultTagList,
 		EGameplayTagSourceType::TagList,
+		EGameplayTagSourceType::RestrictedTagList,
 	};
 
-	for (EGameplayTagSourceType Type : TypesWithRedirects)
+	TArray<const FGameplayTagSource*> AllSources;
+	TagsMgr.FindTagSourcesWithType(EGameplayTagSourceType::DefaultTagList, AllSources);
+	TagsMgr.FindTagSourcesWithType(EGameplayTagSourceType::TagList, AllSources);
+	TagsMgr.FindTagSourcesWithType(EGameplayTagSourceType::RestrictedTagList, AllSources);
+
+	TSet<FString> Seen;
+	for (const FGameplayTagSource* Source : AllSources)
 	{
-		TArray<const FGameplayTagSource*> Sources;
-		TagsMgr.FindTagSourcesWithType(Type, Sources);
-		for (const FGameplayTagSource* Source : Sources)
+		if (!Source) continue;
+		const FString SourceName = Source->SourceName.ToString();
+
+		// SourceIniFilter: match by FName string if provided.
+		if (!SourceIniFilter.IsEmpty() && SourceName != SourceIniFilter) continue;
+
+		const FString IniPath = Source->GetConfigFileName();
+		if (IniPath.IsEmpty()) continue;
+
+		FString IniText;
+		if (!FFileHelper::LoadFileToString(IniText, *IniPath)) continue;
+
+		// Scan for +GameplayTagRedirects= lines.
+		const FString Marker = TEXT("+GameplayTagRedirects=");
+		int32 Pos = 0;
+		while ((Pos = IniText.Find(Marker, ESearchCase::CaseSensitive, ESearchDir::FromStart, Pos)) != INDEX_NONE)
 		{
-#if !UE_VERSION_OLDER_THAN(5, 6, 0)
-			if (!Source || !Source->SourceTagList) continue;
-#else
-			if (!Source) continue;
-#endif
-			if (!SourceFilterFName.IsNone() && Source->SourceName != SourceFilterFName) continue;
+			Pos += Marker.Len();
+			// Collect the parenthesised value.
+			if (Pos >= IniText.Len() || IniText[Pos] != TEXT('(')) continue;
+			int32 Close = IniText.Find(TEXT(")"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Pos + 1);
+			if (Close == INDEX_NONE) break;
 
-			const FString SourceNameStr = Source->SourceName.ToString();
-#if !UE_VERSION_OLDER_THAN(5, 6, 0)
-			for (const FGameplayTagRedirect& R : Source->SourceTagList->GameplayTagRedirects)
-			{
-				if (R.OldTagName.IsNone() || R.NewTagName.IsNone()) continue;
+			FString RedirectBlock = IniText.Mid(Pos + 1, Close - Pos - 1);
+			FString OldTag, NewTag;
+			if (!FParse::Value(*RedirectBlock, TEXT("OldTagName=\""), OldTag, false)) continue;
+			if (!FParse::Value(*RedirectBlock, TEXT("NewTagName=\""), NewTag, false)) continue;
 
-				FString OldStr = R.OldTagName.ToString();
-				// Tags are case-sensitive (Statetree != StateTree); filter must match.
-				if (!OldTagPrefixFilter.IsEmpty()
-					&& !OldStr.StartsWith(OldTagPrefixFilter, ESearchCase::CaseSensitive)) continue;
+			// Strip trailing quote.
+			if (OldTag.EndsWith(TEXT("\""))) OldTag.LeftChopInline(1);
+			if (NewTag.EndsWith(TEXT("\""))) NewTag.LeftChopInline(1);
 
-				FBridgeTagRedirectEntry Entry;
-				Entry.OldTag = MoveTemp(OldStr);
-				Entry.NewTag = R.NewTagName.ToString();
-				Entry.SourceName = SourceNameStr;
-				Result.Add(MoveTemp(Entry));
-			}
-#else
-			// Legacy: parse redirects from this source's ini file
-			{
-				const FString LIniPath = Source->GetConfigFileName();
-				if (LIniPath.IsEmpty()) continue;
-				FString LIniText;
-				if (!FFileHelper::LoadFileToString(LIniText, *LIniPath)) continue;
-				TArray<FString> LLines;
-				LIniText.ParseIntoArrayLines(LLines);
-				for (const FString& LL : LLines)
-				{
-					FString LT = LL.TrimStartAndEnd();
-					if (!LT.StartsWith(TEXT("+GameplayTagRedirects="))) continue;
-					FString OldStr, NewStr;
-					{
-						int32 OI = LT.Find(TEXT("OldTagName=\""));
-						int32 NI = LT.Find(TEXT("NewTagName=\""));
-						if (OI != INDEX_NONE)
-						{
-							int32 OStart = OI + 12; // len of "OldTagName=\""
-							int32 OEnd = LT.Find(TEXT("\""), ESearchCase::CaseSensitive, ESearchDir::FromStart, OStart);
-							if (OEnd != INDEX_NONE) OldStr = LT.Mid(OStart, OEnd - OStart);
-						}
-						if (NI != INDEX_NONE)
-						{
-							int32 NStart = NI + 12; // len of "NewTagName=\""
-							int32 NEnd = LT.Find(TEXT("\""), ESearchCase::CaseSensitive, ESearchDir::FromStart, NStart);
-							if (NEnd != INDEX_NONE) NewStr = LT.Mid(NStart, NEnd - NStart);
-						}
-					}
-					if (OldStr.IsEmpty() || NewStr.IsEmpty()) continue;
+			// Deduplicate across sources.
+			if (Seen.Contains(OldTag)) continue;
+			Seen.Add(OldTag);
 
-					// Tags are case-sensitive (Statetree != StateTree); filter must match.
-					if (!OldTagPrefixFilter.IsEmpty()
-						&& !OldStr.StartsWith(OldTagPrefixFilter, ESearchCase::CaseSensitive)) continue;
+			// OldTagPrefixFilter.
+			if (!OldTagPrefixFilter.IsEmpty() && !OldTag.StartsWith(OldTagPrefixFilter)) continue;
 
-					FBridgeTagRedirectEntry Entry;
-					Entry.OldTag = MoveTemp(OldStr);
-					Entry.NewTag = MoveTemp(NewStr);
-					Entry.SourceName = SourceNameStr;
-					Result.Add(MoveTemp(Entry));
-				}
-			}
-#endif
+			FBridgeTagRedirectEntry Entry;
+			Entry.OldTag = OldTag;
+			Entry.NewTag = NewTag;
+			Entry.SourceName = SourceName;
+			Result.Add(MoveTemp(Entry));
 		}
 	}
 
-	Result.Sort([](const FBridgeTagRedirectEntry& A, const FBridgeTagRedirectEntry& B)
-	{
+	Result.Sort([](const FBridgeTagRedirectEntry& A, const FBridgeTagRedirectEntry& B) {
 		return A.OldTag < B.OldTag;
 	});
 	return Result;
 }
+

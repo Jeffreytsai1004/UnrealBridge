@@ -50,3 +50,4 @@ __pycache__/
 tools/engines.local.json
 tools/build_engines/
 build_matrix_report.md
+/Plugin/UnrealBridge/Intermediate

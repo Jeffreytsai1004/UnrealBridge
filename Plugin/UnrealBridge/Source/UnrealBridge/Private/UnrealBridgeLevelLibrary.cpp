@@ -1,5 +1,4 @@
 #include "UnrealBridgeLevelLibrary.h"
-#include "UnrealBridgeCompat.h"
 
 #include "Engine/World.h"
 #include "Engine/Level.h"
@@ -1119,7 +1118,7 @@ bool UUnrealBridgeLevelLibrary::InvokeFunctionOnActor(
 
 	if (ArgsObj.IsValid() && ArgsObj->Values.Num() > 0)
 	{
-		TMap<FBridgeJsonAttrsKey, TSharedPtr<FJsonValue>> InputsOnly;
+		TMap<FString, TSharedPtr<FJsonValue>> InputsOnly;
 		for (TFieldIterator<FProperty> It(Func); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
 		{
 			FProperty* Prop = *It;
@@ -1129,7 +1128,7 @@ bool UUnrealBridgeLevelLibrary::InvokeFunctionOnActor(
 			if (bIsReturn) continue;
 			if (bIsOut && !bIsRef) continue;
 			TSharedPtr<FJsonValue> Val = ArgsObj->TryGetField(Prop->GetName());
-			if (Val.IsValid()) InputsOnly.Add(FBridgeJsonAttrsKey(*Prop->GetName()), Val);
+			if (Val.IsValid()) InputsOnly.Add(Prop->GetName(), Val);
 		}
 		FText FailReason;
 		if (InputsOnly.Num() > 0 &&

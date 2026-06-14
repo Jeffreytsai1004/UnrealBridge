@@ -271,7 +271,7 @@ public:
 	 *         any writable source.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|GameplayTag")
-	static bool RemoveGameplayTagRedirect(const FString& OldTag, const FString& NewTag);
+	static bool RemoveGameplayTagRedirect(const FString& OldTag, const FString& NewTag, bool bRemoveChildren = false);
 
 	/**
 	 * Enumerate every `+GameplayTagRedirects=` entry currently registered in
